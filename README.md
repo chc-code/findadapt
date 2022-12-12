@@ -20,35 +20,36 @@ If your input data are human small RNA seq, you just need to specify the paramet
    
 ## input   
    
-`-fq fn_fq_file`   identify the adapter sequence for a single fastq file   
-`-prj file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -gse are mutually exlusive   
-`-keep study_ID1 study_ID2...`     if specified, will only run the study ID in this list.   
+- `-fq fn_fq_file`   identify the adapter sequence for a single fastq file   
+- `-prj file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -gse are mutually exlusive   
+- `-keep study_ID1 study_ID2...`     if specified, will only run the study ID in this list.   
    
 ##  reference   
 By default, the reference is most abundant 100 miRNA in human. you can also useyour own sequence list, available options are   
-`-seq str`   known highly expressed sequence. Can be directly specified in the command (sep by space) or filename, if file, should be in fasta format or one sequence per line.   
-`-genelist/-glist fn_genelist`   known expressed genes.  Can be gene symbol or miRNA ID. can be directly specified in the command (sep by space) or filename, if file, one gene per line. if this option is specified, must also specify the organism   
-`-rnaseq / -rna`  flag, specify when the fastq file is a RNA-seq result(most of the reads are protein coding genes). this option must comes together with `-seq` or `-genelist`.   
+- `-seq str`   known highly expressed sequence. Can be directly specified in the command (sep by space) or filename, if file, should be in fasta format or one sequence per line.   
+- `-genelist/-glist fn_genelist`   known expressed genes.  Can be gene symbol or miRNA ID. can be directly specified in the command (sep by space) or filename, if file, one gene per line. if this option is specified, must also specify the organism   
+- `-rnaseq / -rna`  flag, specify when the fastq file is a RNA-seq result(most of the reads are protein coding genes). this option must comes together with - `-seq` or `-genelist`.   
+
 If not specified, will consider the input as small RNA seq   
-`-organism / -org str` organism name or NCBI taxon ID, default is human. if genelist is specified, this value must be specified explicitly   
+- `-organism / -org str` organism name or NCBI taxon ID, default is human. if genelist is specified, this value must be specified explicitly   
    
    
 ## run control   
-`-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1   
-`-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
-`-max_random_linker int`   max allowed random seqence length, default = 6   
-`-max_borrowed_base int`  max bp the adaptor can borrow from insert region, this will minimize the truncating of the adapter sequence, default=2,   
-`-expected_adapter_len int`  expected adapter length to discover, by default, 12 nt   
-`-min_reads int`  minimum matched reads number for infering per fastq file, default=50, if lower than this value, the adapter inferring step will be skip, you may need to check the reference settings.   
-`-threads / -cpu int` the threads to use, by default = 5. Usually, the performance won't improve greatly when more than 5 threads are used (refer to the manuscript for detail)   
-`-enough_reads int` enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000   
-`-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when you used new reference.   
+- `-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1   
+- `-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
+- `-max_random_linker int`   max allowed random seqence length, default = 6   
+- `-max_borrowed_base int`  max bp the adaptor can borrow from insert region, this will minimize the truncating of the adapter sequence, default=2,   
+- `-expected_adapter_len int`  expected adapter length to discover, by default, 12 nt   
+- `-min_reads int`  minimum matched reads number for infering per fastq file, default=50, if lower than this value, the adapter inferring step will be skip, you may need to check the reference settings.   
+- `-threads / -cpu int` the threads to use, by default = 5. Usually, the performance won't improve greatly when more than 5 threads are used (refer to the manuscript for detail)   
+- `-enough_reads int` enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000   
+- `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when you used new reference.   
    
 ## output control   
-`-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file   
-`-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
-`-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
-`-v / -verbose` flag, display the full logging information in the terminal   
+- `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file   
+- `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
+- `-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
+- `-v / -verbose` flag, display the full logging information in the terminal   
    
 # Examples   
    
