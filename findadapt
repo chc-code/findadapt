@@ -19,17 +19,16 @@ import multiprocessing as mp
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 ps.add_argument('-fq', help="""single fastq file path""")
-ps.add_argument('-gse', help="""a 2 column file , col1 = gse, col2 = fq file""")
+ps.add_argument('-prj', help="""2 column text file , col1 = prj_id, col2 = fq file path""")
 ps.add_argument('-o',  '-out', help="""output prefix""")
 ps.add_argument('-keep', help="""only run the gse in this list""", nargs='*')
 ps.add_argument('-seq', help="""known expressed sequence, can be directly specified in the command (sep by space) or filename, if file, should be in fasta format or one sequence per line.""", nargs='*')
 ps.add_argument('-genelist', '-glist', help="""know expressed gene list, can be gene symbol or miRNA ID. can be directly specified in the command (sep by space) or filename, if file, one gene per line. if this option is specified, must also specify the organism""", nargs='*')
+ps.add_argument('-rnaseq', '-rna',  help="""the fastq file is for RNA-seq, if not set, consider as smallRNA seq""", action='store_true')
 ps.add_argument('-organism', '-org', help="""organism name or NCBI taxon ID, default is human. if genelist is specified, this value must be specified explicitly""")
 ps.add_argument('-nreads', '-n', help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
 ps.add_argument('-nsam', '-ns', help="""how many samples used to check, if all, use -1, only valid for -gse, default=5""", default=5, type=int)
-ps.add_argument('-rnaseq', '-rna',  help="""the fastq file is for RNA-seq, if not set, consider as smallRNA seq""", action='store_true')
-ps.add_argument('-force', '-f',  help="""force rerun, even the adapter result already exist""", action='store_true')
-ps.add_argument('-force_reads', '-fr',  help="""force parse the reads from fq, ignore previous parsed_reads""", action='store_true')
+ps.add_argument('-force', '-f',  help="""force parse the reads from fq, ignore previous parsed_read""", action='store_true')
 ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
 ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 6""", type=int, default=6)
 ps.add_argument('-max_borrowed_base', help="""max bp the adaptor can borrow from insert region, default=2""", type=int, default=2)
@@ -1392,8 +1391,10 @@ if __name__ == "__main__":
     gse_map = args.gse
     organism = args.organism
     nreads = args.nreads
-    force = args.force
-    force_parse_reads = args.force_reads
+    # force = args.force  
+    # force_parse_reads = args.force_reads
+    force_parse_reads = args.force
+    force = force_parse_reads
     restrict_gse_list = args.keep or set()
     restrict_gse_list = set(restrict_gse_list)
     threads = args.threads
