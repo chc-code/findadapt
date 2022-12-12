@@ -1388,10 +1388,10 @@ def run_cutadapt(adapter_gse, adapter_fq, task):
 if __name__ == "__main__":
 
     fn_fq = args.fq
-    gse_map = args.gse
+    gse_map = args.prj
     organism = args.organism
     nreads = args.nreads
-    # force = args.force  
+    # force = args.force
     # force_parse_reads = args.force_reads
     force_parse_reads = args.force
     force = force_parse_reads
