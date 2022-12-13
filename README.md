@@ -16,25 +16,31 @@ FindAdapt is written in Python3 and is a stand-alone script without any package 
    
 The usage can be accessed by   
 `findadapt -h`   
-If your input data are human small RNA seq, you just need to specify the parameters in the `input` section below   
-   
-## input   
-   
+If your input data are human small RNA seq, you just need to specify the parameters in the `Main arguments` section below   
+
+## Main arguments    
+You can only select one option (either `-fq` or `-prj`) as the input
+
 - `-fq fn_fq_file`   identify the adapter sequence for a single fastq file   
 - `-prj file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -gse are mutually exlusive   
-- `-keep study_ID1 study_ID2...`     if specified, will only run the study ID in this list.   
-   
-##  reference   
-By default, the reference is most abundant 100 miRNA in human. you can also useyour own sequence list, available options are   
-- `-seq str`   known highly expressed sequence. Can be directly specified in the command (sep by space) or filename, if file, should be in fasta format or one sequence per line.   
-- `-genelist/-glist fn_genelist`   known expressed genes.  Can be gene symbol or miRNA ID. can be directly specified in the command (sep by space) or filename, if file, one gene per line. if this option is specified, must also specify the organism   
-- `-rnaseq / -rna`  flag, specify when the fastq file is a RNA-seq result(most of the reads are protein coding genes). this option must comes together with - `-seq` or `-genelist`.   
 
-If not specified, will consider the input as small RNA seq   
-- `-organism / -org str` organism name or NCBI taxon ID, default is human. if genelist is specified, this value must be specified explicitly   
+## Optional arguments
+
+###  customize reference   
+By default, the reference is most abundant 100 miRNA in human. you can also useyour own sequence list if the your input doesn't match the default reference setting, available options are   
+
+- `-seq str`   known highly expressed sequence. Can be directly specified in the command (sep by space) or filename, if file, should be in fasta format or one sequence per line.   
+- `-genelist/-glist str`   known expressed genes. the gene name is the miRNA ID (such as hsa-miR-199a-5p). the argument can be miRNA ID directly specified in command line (sep by space) or the filename for the genelist (one line for a miRNA ID).  
+- `-organism / -org str` organism name or NCBI taxon ID, default is human. 
+
+## Output options   
+- `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file   
+- `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
+- `-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
+- `-v / -verbose` flag, display the full logging information in the terminal   
    
    
-## run control   
+## Other options   
 - `-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1   
 - `-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
 - `-max_random_linker int`   max allowed random seqence length, default = 6   
@@ -45,12 +51,7 @@ If not specified, will consider the input as small RNA seq
 - `-enough_reads int` enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000   
 - `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when you used new reference.   
    
-## output control   
-- `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file   
-- `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
-- `-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
-- `-v / -verbose` flag, display the full logging information in the terminal   
-   
+
 # Examples   
    
 Here we provided several fastq files from 3 studies   
