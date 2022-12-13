@@ -33,14 +33,14 @@ By default, the reference is most abundant 100 miRNA in human. you can also usey
 - `-genelist/-glist str`   known expressed genes. the gene name is the miRNA ID (such as hsa-miR-199a-5p). the argument can be miRNA ID directly specified in command line (sep by space) or the filename for the genelist (one line for a miRNA ID).  
 - `-organism / -org str` organism name or NCBI taxon ID, default is human. 
 
-## Output options   
+### Output options   
 - `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file   
 - `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
 - `-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
 - `-v / -verbose` flag, display the full logging information in the terminal   
    
    
-## Other options   
+### Other options   
 - `-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1   
 - `-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
 - `-max_random_linker int`   max allowed random seqence length, default = 6   
