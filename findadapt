@@ -42,7 +42,9 @@ ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is se
 
 args = ps.parse_args()
 
-pw_script = os.path.realpath(os.path.dirname(__file__))
+pw_script = os.path.dirname(os.path.realpath(__file__))
+print(pw_script)
+
 verbose = args.v
 
 import logging
