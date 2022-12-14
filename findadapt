@@ -39,11 +39,13 @@ ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads n
 ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
 ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is search from PATH""")
 
+ps.add_argument('-force1', '-f1',  help="""only rerun the infer adapter seq, don't re-parse the fastq file""", action='store_true')
+ps.add_argument('-debug', '-d',  help="""debug mode""", action='store_true')
+
 
 args = ps.parse_args()
 
 pw_script = os.path.dirname(os.path.realpath(__file__))
-print(pw_script)
 
 verbose = args.v
 
@@ -450,6 +452,7 @@ def pick_3p_adapter(adapter_ct):
 
 
     logger.debug(f'raw adapter count: \n{adapter_ct}')
+    
     max_random_linker = max(adapter_ct)
     idx_seq, idx_phase, idx_ct = 0, 1, 2
 
@@ -461,7 +464,7 @@ def pick_3p_adapter(adapter_ct):
             # this phase have no adapter found
             continue
         for seq, ct in top5_seq:
-            for shift in range(1, 5):
+            for shift in range(1, 7):
                 child_seq = seq[shift:]
                 if child_seq not in lineage:
                     lineage[child_seq] = [seq, phase, ct]
@@ -477,9 +480,11 @@ def pick_3p_adapter(adapter_ct):
 
     # logger.info(lineage)
 
-    thres_increase_ratio = 1.05  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
+    thres_increase_ratio = 1.5  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
     res = []
     keep_status = {}
+
+    
 
     empty_adapter_ct = [None, 0] # ele1 = phase, ele2 = count
     for phase in range(max_random_linker + 1):
@@ -506,15 +511,23 @@ def pick_3p_adapter(adapter_ct):
                     empty_adapter_ct[1] = ct
                     empty_adapter_ct[0] = phase
                 continue
-
-
             skip = 0
-            for shift in range(1, 5):
+            
+            # if seq.startswith('TGGAATT') and phase == 4:
+            #     seq_truncated = seq[:-phase]
+            #     # logger.info(f'{seq}, {ct}\n{seq_truncated}, ')
+            #     if seq_truncated in lineage:
+            #         parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
+            #         if ct > parent_ct * 1.3:
+            #             res.append([seq, phase, ct])
+            #             continue
+            
+            for shift in range(1, 7):
                 seq_truncated = seq[:-shift]
                 if seq_truncated in lineage:
                     parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
                     parent_lb = f'{parent_seq}_{parent_phase}'
-                    if ct < parent_ct * thres_increase_ratio:
+                    if ct < parent_ct * (max(1.3, 1 + 0.1 * parent_phase)):
                         skip = 1
                         break
             if skip:
@@ -550,6 +563,21 @@ def pick_3p_adapter(adapter_ct):
     # logger.info(res_final)
     return res_final
 
+def check_parsed_reads_complexity(parsed_reads):
+    res = {}
+    for i in parsed_reads:
+        try:
+            end_str = i[1][-2:]
+        except:
+            continue
+        res.setdefault(end_str, 0)
+        res[end_str] += 1
+    total_n = len(parsed_reads)
+    res = [(k, round(v/total_n, 3)) for k, v in res.items()]
+    res = sorted(res, key=lambda _: _[1], reverse=True)
+    return res
+    
+
 def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12):
     """
     the reason for include the insert as parameter is that
@@ -572,11 +600,13 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
     # get the count for each phase, each sequence
     # inital seed, collect all possible sequence in the inital run
 
-    inital_n_reads = 800 # collect all possible seqence in the first n reads
+
+    inital_n_reads = 1000 # collect all possible seqence in the first n reads
 
     # i_insert = 'ATCGGGG'
 
     truncated_adapter_map = {}
+    available_seq = set()
 
     def get_ct(data, initial=False):
         # for _, seq, i_insert in data:  # for split method
@@ -586,7 +616,6 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
         ct_fraction = 1
 
         # because each read, we will calc no borrow, borrow 1 base, borrow 2base , so the sum of counts of all forms will be much larger than the actual reads count
-        # which is confusing
         for _, i_insert, seq in data:  # for string subset method
         # for idata in data:
             # try:
@@ -609,12 +638,16 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
                     candidate_borrow_seq = i_insert[phase - max_borrowed_base:] + seq[:phase]
                 else:
                     candidate_borrow_seq = seq[phase - max_borrowed_base:phase]
-
-                adapt_list = []
-                for n_borrow in range(max_borrowed_base + 1):
+                
+                borrow_list = range(max_borrowed_base + 1)
+                
+                # avoid duplicate count during the borrow loop
+                counted = {}  # key = seq
+                
+                
+                for n_borrow in borrow_list:
                     # ct_add,  if the n_borrow == 0, which is the original sequence, will add a complete 1
                     # otherwise, will only add a proportion
-
                     if n_borrow > 0:
                         adapt_seq = candidate_borrow_seq[-n_borrow:] + seq[phase: phase + expected_adapter_len - n_borrow]
                         ct_add = ct_fraction
@@ -626,59 +659,104 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
                     # polyN seq
                     if adapt_seq[:10] == adapt_seq[0] * 10:
                         adapt_seq = adapt_seq[:10]
+                        available_seq.add(adapt_seq)
                     elif len_adapt < expected_adapter_len:
                         # the adapter found maybe truncated
                         if adapt_seq in truncated_adapter_map:
                             adapt_seq = truncated_adapter_map[adapt_seq]
                         else:
-                            candidate_parent = sorted([_ for _ in ires if _.startswith(adapt_seq)], key=lambda _: (len(_), _))
+                            
+                            candidate_parent = sorted([_ for _ in available_seq if _.startswith(adapt_seq)], key=lambda _: (len(_), _))
                             if len(candidate_parent) > 0:
                                 adapt_seq_new = candidate_parent[-1]
                                 truncated_adapter_map[adapt_seq] = adapt_seq_new
-                                adapt_seq = adapt_seq_new
+                                # logger.info(f'truncated = {adapt_seq}, parent = {adapt_seq_new}, phase = {phase}, borrow = {n_borrow}, parent = {len(adapt_seq_new)}')
+                                # if len(adapt_seq_new) == 9:
+                                #     logger.info(candidate_parent)
+                                # adapt_seq = adapt_seq_new
+                            else:
+                                available_seq.add(adapt_seq)
+                    elif adapt_seq not in available_seq:
+                        available_seq.add(adapt_seq)
                     if initial:
                         ires.setdefault(adapt_seq, 0)
+                        if counted.get(adapt_seq):
+                            continue
+                        counted[adapt_seq] = True
                         ires[adapt_seq] += ct_add
                     else:
-                        # if not the inital run, will ignore the noew adapter seq
+                        # if not the inital run, will ignore the new adapter seq
                         try:
                             ires[adapt_seq] += ct_add
+                            if counted.get(adapt_seq):
+                                continue
+                            counted[adapt_seq] = True
                         except:
                             pass
+
+
+
 
     get_ct(parsed_reads[:inital_n_reads], initial=True)
     if len(parsed_reads) > inital_n_reads:
         get_ct(parsed_reads[inital_n_reads:], initial=False)
 
+    # logger.info(ct)
 
     # remove the low count seq and  and shift + borrowed, with exact number as upper unshifted
     # remove the same seq in the higher phase
     dedup = {}
     max_ct = 0
+
+
+    # check the complexity of the parsed reads
+    # in case the found reads are mostly of very few type of miRNA, and some type of the sequence dominant the result, 
+    # in that case, the adapter sequence may be not accurate
+    reads_end_complexity = check_parsed_reads_complexity(parsed_reads)
+    logger.info(reads_end_complexity)
+    low_complex = True if reads_end_complexity[0][1] > 0.7 else False
+
+    seq_check_list = ['TGGAATTCTCGG', 'AGATCGGAAGAG', 'AACTGTAGGCAC', 'GATCGGAAGAGC', 'AAAAAAAAAA']
+    if low_complex:
+        for phase in list(ct):
+            if phase == 0:
+                continue
+            for seq in list(ct[phase]):
+                seq_ct =ct[phase][seq]
+                for seq_check in seq_check_list:
+                    seq_check_prefix = seq_check[:7]
+                    if seq_check_prefix in seq and phase != 4:
+                        prev_ct = ct[0].get(seq_check) or 0
+                        if seq_ct > prev_ct:
+                            ct[0][seq_check] = seq_ct
+                            # logger.info(f'replaced: {phase}: {seq}: {seq_ct}')
+                            del ct[phase][seq]
+                        continue
+
+                
     for phase in list(ct):
         for seq in list(ct[phase]):
-            seq_ct = ct[phase][seq]
+            seq_ct =ct[phase][seq]
             if seq_ct > max_ct:
                 max_ct = seq_ct
-            if seq_ct < 10:
+            if seq_ct < max_ct * 0.2:
                 del ct[phase][seq]
                 continue
             if seq not in dedup:
                 dedup[seq] = seq_ct
-            elif seq_ct < dedup[seq] * 1.5:
+            elif seq_ct < dedup[seq] * 1.3:
                 del ct[phase][seq]
             else:
                 dedup[seq] = seq_ct
-
 
     # remove the lower than 50% max ct seq
     for phase in list(ct):
         for seq in list(ct[phase]):
             seq_ct = ct[phase][seq]
-            seq_tmp = list(set(seq))
-            if len(seq_tmp) == 1 and seq_tmp[0] == 'A':
+            seq_tmp = set(seq)
+            if len(seq_tmp) == 1:
                 # SMARTer / CATS kit
-                seq_new = 'A'*12
+                seq_new = seq[0] * 12
                 if phase != 0:
                     try:
                         prev_ct = ct[0][seq_new]
@@ -686,17 +764,16 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
                         prev_ct = 0
                     if seq_ct > prev_ct:
                         ct[0][seq_new] = seq_ct
-
                     del ct[phase][seq]
                 elif seq != seq_new:
                     ct[0][seq_new] = seq_ct
                     del ct[0][seq]
-
                 continue
 
             ct[phase][seq] = round(seq_ct, 2)
             if seq_ct < max_ct * 0.5:
                 del ct[phase][seq]
+
 
     ct = {k: v for k, v in ct.items() if len(v) > 0}
     if len(ct) == 0:
@@ -1048,11 +1125,18 @@ def main(pw_data, fn_fq, ref_seq, force_parse_reads=False, min_parsed_reads=50, 
     n_processed = -1
     if do_parse_reads:
         parsed_reads, n_processed = get_parsed_reads(fn_fq, fh, ref_seq, enough_parsed_reads=enough_parsed_reads, threads=threads)
+        
+        with open(fn_parsed_redas, 'wb') as o:
+            pickle.dump(parsed_reads, o)
 
+    if args.debug:
+        fntmp = f'{fq_lb1}.parsed_reads.txt'
+        logger.info(red(f'parsed reads = {fntmp}'))
+        with open(fntmp, 'w') as o:
+            print('\n'.join(map(str, parsed_reads)), file=o)
 
     n_parsed_reads = len(parsed_reads)
-    with open(fn_parsed_redas, 'wb') as o:
-        pickle.dump(parsed_reads, o)
+
 
     if n_parsed_reads < min_parsed_reads:
         logger.info(red(f'\t\ttoo few matched reads (n={n_parsed_reads}) found in this fastq file, please check if you used the correct organism or reference'))
@@ -1285,10 +1369,13 @@ def export_data(data, prj):
 
     fn_gse = f'{prj}.adapter.txt'
     fn_fq = f'{prj}.per_fq.adapter.txt'
-
+    
+    tmp = '\n'.join(['\t'.join(map(str, _)) for _ in res])
+    if verbose:
+        print(tmp + '\n\n')
     with open(fn_gse, 'w') as o:
-        tmp = ['\t'.join(map(str, _)) for _ in res]
-        print('\n'.join(tmp), file=o)
+        
+        print(tmp, file=o)
     with open(fn_fq, 'w') as o:
         res_fq = ['\t'.join(map(str, _)) for _ in res_fq]
         print('\n'.join(res_fq), file=o)
@@ -1395,8 +1482,11 @@ if __name__ == "__main__":
     nreads = args.nreads
     # force = args.force
     # force_parse_reads = args.force_reads
+    
     force_parse_reads = args.force
-    force = force_parse_reads
+    force = args.force1 or args.force
+
+
     # restrict_gse_list = args.keep or set()
     # restrict_gse_list = set(restrict_gse_list)
     threads = args.threads
@@ -1513,20 +1603,22 @@ if __name__ == "__main__":
         if len(tmp) > 0:
             ref_seq.append((parse_read_seq_general, tmp))
 
-    fn_exclude = f'{pw_script}/../exRNA/skipped_gse_due_to_non_smallRNA.txt'
-    try:
-        with open(fn_exclude) as f:
-            gse_exclude = {_.strip() for _ in f if _.strip()}
-    except:
-        logger.debug(f'excluded GSE list file not found: {fn_exclude}')
-        gse_exclude = set()
+    # fn_exclude = f'{pw_script}/../exRNA/skipped_gse_due_to_non_smallRNA.txt'
+    # try:
+    #     with open(fn_exclude) as f:
+    #         gse_exclude = {_.strip() for _ in f if _.strip()}
+    # except:
+    #     logger.debug(f'excluded GSE list file not found: {fn_exclude}')
+    #     gse_exclude = set()
 
-    task_excluded = set(task_order) & gse_exclude
-    if len(task_excluded) > 0:
-        logger.warning(f'the following task is excluded: \n\t' + red('\n\t'.join(sorted(task_excluded))))
+    # task_excluded = set(task_order) & gse_exclude
+    # if len(task_excluded) > 0:
+    #     logger.warning(f'the following task is excluded: \n\t' + red('\n\t'.join(sorted(task_excluded))))
 
 
-    task_set = [_ for _ in task_order if _ not in gse_exclude]
+    # task_set = [_ for _ in task_order if _ not in gse_exclude]
+    task_set = task_order
+    
     res = {}
     n = 0
     n_prj = len(task_set)
