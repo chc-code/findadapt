@@ -16,6 +16,9 @@ import pickle, json
 # from subprocess import Popen, PIPE
 import argparse as arg
 import multiprocessing as mp
+
+debugmode = False
+
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 ps.add_argument('-fq', help="""single fastq file path""")
@@ -39,9 +42,9 @@ ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads n
 ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
 ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is search from PATH""")
 
-ps.add_argument('-force1', '-f1',  help="""only rerun the infer adapter seq, don't re-parse the fastq file""", action='store_true')
-ps.add_argument('-debug', '-d',  help="""debug mode""", action='store_true')
-
+if debugmode:
+    ps.add_argument('-force1', '-f1',  help="""only rerun the infer adapter seq, don't re-parse the fastq file""", action='store_true')
+    ps.add_argument('-debug', '-d',  help="""debug mode""", action='store_true')
 
 args = ps.parse_args()
 
@@ -178,7 +181,12 @@ def load_config():
         config = {}
 
     config = {k: v.replace('$HOME', home) for k, v in config.items()}
-    print(config)
+    # print(config)
+    pw_data_environ = os.environ.get('FINDADAPT_DATA')
+    if not config.get('pw_data') and pw_data_environ:
+        config['pw_data'] = pw_data_environ
+        
+    
     return config
 
 
@@ -713,7 +721,7 @@ def infer_3_end_adaptor(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
     # in case the found reads are mostly of very few type of miRNA, and some type of the sequence dominant the result, 
     # in that case, the adapter sequence may be not accurate
     reads_end_complexity = check_parsed_reads_complexity(parsed_reads)
-    logger.info(reads_end_complexity)
+    logger.debug(reads_end_complexity)
     low_complex = True if reads_end_complexity[0][1] > 0.7 else False
 
     seq_check_list = ['TGGAATTCTCGG', 'AGATCGGAAGAG', 'AACTGTAGGCAC', 'GATCGGAAGAGC', 'AAAAAAAAAA']
@@ -1129,11 +1137,12 @@ def main(pw_data, fn_fq, ref_seq, force_parse_reads=False, min_parsed_reads=50, 
         with open(fn_parsed_redas, 'wb') as o:
             pickle.dump(parsed_reads, o)
 
-    if args.debug:
-        fntmp = f'{fq_lb1}.parsed_reads.txt'
-        logger.info(red(f'parsed reads = {fntmp}'))
-        with open(fntmp, 'w') as o:
-            print('\n'.join(map(str, parsed_reads)), file=o)
+    if debugmode:
+        if args.debug:
+            fntmp = f'{fq_lb1}.parsed_reads.txt'
+            logger.info(red(f'parsed reads = {fntmp}'))
+            with open(fntmp, 'w') as o:
+                print('\n'.join(map(str, parsed_reads)), file=o)
 
     n_parsed_reads = len(parsed_reads)
 
@@ -1164,27 +1173,13 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
     thres_adapter_ratio_per_fq = 0.1 # the min ratio of reads found this adapter
     initial_call = True if ires is None else False
 
-    fn_gse_pkl = f'{pw_data}/{prj}.summary.pkl'
     ires = ires or {'total_count': 0, 'fail': False, 'non_universal': False, 3: {}, 5: {}, 'err': [], 'fq_adapter': [], 'picked': []}
     # fail, if set to 1, means that the previous search adapter for this gse failed
     # non_universal, if True (a list, which means that , each sample has it's own adapter)
     # fq_adapter , list, each elemnet is fq_lb, total_count, adapter3, adapter5, err_msg_5_end
     # picked, 2 element 3' and 5' adapter, each has 3 element, [seq, phase, ratio]
 
-    try:
-        if not force and not fn_gse_pkl.startswith('single'):
-            with open(fn_gse_pkl, 'rb') as f:
-                ires_prev = pickle.load(f)
-        else:
-            ires_prev = None
-    except:
-        ires_prev = None
-
-    if not force and ires_prev is not None:
-        logger.info(green(f'\tadapter already got'))
-        if ires_prev['fail']:
-            logger.warning(red(f'\tprevious adapter not found'))
-        return ires_prev
+    ires_prev = None
 
     if fh is not None:
         fq_list = ['stdin']
@@ -1301,10 +1296,6 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
             logger.warning(red(f'\t\t{prj}: each fq file in this dataset may have differnt adapters'))
             logger.info(red(f'\t\tnow getting adapter for all samples'))
             ires = get_adapter_per_prj(prj, fq_list[nsam:], pw_data, force=True, force_parse_reads=force_parse_reads, nsam=-1, ires=ires, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=None)
-
-
-    with open(fn_gse_pkl, 'wb') as o:
-        pickle.dump(ires, o)
 
     return ires
 
@@ -1480,11 +1471,13 @@ if __name__ == "__main__":
     gse_map = args.prj
     organism = args.organism
     nreads = args.nreads
-    # force = args.force
-    # force_parse_reads = args.force_reads
-    
-    force_parse_reads = args.force
-    force = args.force1 or args.force
+
+    if debugmode:
+        force_parse_reads = args.force
+        force = args.force1 or args.force
+    else:
+        force = args.force
+        force_parse_reads = force
 
 
     # restrict_gse_list = args.keep or set()
