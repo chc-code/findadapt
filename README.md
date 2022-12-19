@@ -22,7 +22,7 @@ If your input data are human small RNA seq, you just need to specify the paramet
 You can only select one option (either `-fq` or `-prj`) as the input
 
 - `-fq fn_fq_file`   identify the adapter sequence for a single fastq file   
-- `-prj file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -gse are mutually exlusive   
+- `-prj file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -prj are mutually exlusive   
 
 ## Optional arguments
 
