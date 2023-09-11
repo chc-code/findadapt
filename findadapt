@@ -19,36 +19,37 @@ import argparse as arg
 import multiprocessing as mp
 import gzip
 
-debugmode = True
 
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
-ps.add_argument('fq', help="""single fastq file path""")
-ps.add_argument('-fn_fq_list', help="""2 column text file , col1 = prj_id, col2 = fq file path""")
+ps.add_argument('fq', help="""single fastq file path""", nargs='?')
+ps.add_argument('-fn_fq_list', '-list', '-l', help="""2 column text file , col1 = prj_id, col2 = fq file path""")
 ps.add_argument('-o',  '-out', help="""output prefix""")
 ps.add_argument('-quiet', '-q',  help="""suppress the pyahocorasick not installed warning""", action='store_true')
 ps.add_argument('-fn_refseq', help="""file name for known expressed sequence,  in fasta format or one sequence per line.""", nargs='?')
 ps.add_argument('-organism', '-org', help="""organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other """, default='human')
-ps.add_argument('-nreads', '-n', help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
+ps.add_argument('-nreads',  help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
 ps.add_argument('-nsam', '-ns', help="""how many samples used to check, if all, use -1, only valid for -gse, default=5""", default=5, type=int)
 ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
 ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 6""", type=int, default=6)
 ps.add_argument('-expected_adapter_len', '-adapt_len', help="""expected adapter len to discover, default = 12 nt""", type=int, default=12)
-ps.add_argument('-thres_multiplier', '-thres' help="""the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporthing each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including unnecessary random sequence due to sporadic minor count difference, default is 1.2""", type=int, default=1.2)
+ps.add_argument('-thres_multiplier', '-thres', help="""the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporthing each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including unnecessary random sequence due to sporadic minor count difference, default is 1.2""", type=float, default=1.2)
 ps.add_argument('-min_reads', '-min', help="""minimum matched reads number for infering per fastq file, default=50""", type=int, default=50)
 ps.add_argument('-threads', '-cpu', help="""threads to use, default=5, the speed won't improve when threads is more than 5""", type=int, default=5)
 ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000""", type=int, default=1000)
 ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
 ps.add_argument('-print', '-printonly', '-p', help="""print only, do not write to file""", action='store_true')
 ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is search from PATH""")
+ps.add_argument('-debug', help="""debug mode, will write the parsed reads to pickle file""", action='store_true')
+ps.add_argument('-borrow', '-b',  help="""max borrow base length, default is 2""", type=int, default=2)
+ps.add_argument('-force', '-f',  help="""ignore the existing parsed reads pickle file (gererated when using  -debug), parse reads from scratch""", action='store_true')
 
 benchmode = False
-if debugmode:
-    ps.add_argument('-force1', '-f1',  help="""only rerun the infer adapter seq, don't re-parse the fastq file""", action='store_true')
-    ps.add_argument('-debug', '-d',  help="""debug mode""", action='store_true')
-    ps.add_argument('-force', '-f',  help="""force parse the reads from fq, ignore previous parsed_read""", action='store_true')
 
 args = ps.parse_args()
+
+debugmode = args.debug
+force_parse_reads = args.force
 
 pw_script = os.path.dirname(os.path.realpath(__file__))
 
@@ -59,33 +60,88 @@ glob_var = {'blocked_seq': None}
 
 import logging
 
+def getlogger(fn_log=None, logger_name=None, level='INFO', nocolor=False):
+    logger_name = logger_name or "main"
+    
+    try:
+        logger = logging.getLogger(logger_name)
+    except:
+        logger = logging.getLogger('terminal')
+
+    class CustomFormatter(logging.Formatter):
+    
+        def __init__(self, nocolor=False):
+            self.nocolor = nocolor
+        colors = {
+            'black': '\u001b[30;1m',
+            'red': '\u001b[31;1m',
+            'r': '\u001b[31;1m',
+            'bold_red': '\u001b[31;1m',
+            'rb': '\u001b[31;1m',
+            'green': '\u001b[32;1m',
+            'g': '\u001b[32;1m',
+            'gb': '\u001b[32;1m',
+            'yellow': '\u001b[33;1m',
+            'blue': '\u001b[34;1m',
+            'b': '\u001b[34;1m',
+            'purple': '\u001b[35;1m',
+            'p': '\u001b[35;1m',
+            'grey': '\u001b[38;1m',
+        }
+        FORMATS = {
+            logging.WARNING: colors['purple'],
+            logging.ERROR: colors['bold_red'],
+            logging.CRITICAL: colors['bold_red'],
+        }
+    
+        def format(self, record):
+            format_str = "%(asctime)s  %(levelname)-6s %(funcName)-20s  line: %(lineno)-5s  %(message)s"
+            reset = "\u001b[0m"
+            log_fmt = None
+            
+            record.msg = str(record.msg)
+            if self.nocolor:
+                pass
+            elif '@' in record.msg[:10]:
+                try:
+                    icolor, tmp = record.msg.split('@', 1)
+                    log_fmt = self.colors.get(icolor)
+                    if log_fmt:
+                        record.msg = tmp
+                except:
+                    raise
+                    pass
+            else:
+                log_fmt = self.FORMATS.get(record.levelno)
+            if log_fmt:
+                record.msg = log_fmt + record.msg + reset
+            formatter = logging.Formatter(format_str, datefmt='%Y-%m-%d %H:%M:%S')
+            return formatter.format(record)
+    
+    logger.setLevel('DEBUG')
+    handler_names = {_.name for _ in logger.handlers}
+    if 'console' not in handler_names:
+        console = logging.StreamHandler(sys.stdout)
+        console.setFormatter(CustomFormatter(nocolor=nocolor))
+        console.setLevel(level)
+        console.name = 'console'
+        logger.addHandler(console)
+
+    if fn_log and 'file' not in handler_names:
+        fh_file = logging.FileHandler(fn_log, mode='w', encoding='utf8')
+        fh_file.setLevel('DEBUG')
+        fh_file.setFormatter(CustomFormatter())
+        fh_file.name = 'file'
+        logger.addHandler(fh_file)
+    return logger
 if not benchmode:
     prefix =  args.o or 'findadapter'
     fn_log = f'{prefix}.log'
-
-    fmt = logging.Formatter('%(asctime)s  %(levelname)-6s %(funcName)-20s  line: %(lineno)-5s  %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-    console_level = 'DEBUG' if verbose else 'INFO'
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(fmt)
-    console.setLevel(console_level)
-
-    fh_file = logging.FileHandler(fn_log, mode='w', encoding='utf8')
-
-    fh_file.setLevel('DEBUG')
-    fh_file.setFormatter(fmt)
-
-    try:
-        logger = logging.getLogger(__file__)
-    except:
-        logger = logging.getLogger('terminal')
-    logger.setLevel('DEBUG')
-    logger.addHandler(console)
-    logger.addHandler(fh_file)
 else:
-    starttime = time.time()
+    fn_log = None
 
-    logger = logging.getLogger(__file__)
-    logger.setLevel('WARNING')
+level = 'DEBUG' if args.debug or verbose else 'INFO'
+logger = getlogger(fn_log, level=level)
 
 platform = sys.platform
 
@@ -183,25 +239,6 @@ def red(s):
 def green(s):
     return colored(s, 'green', attrs=['bold'])
 
-def load_config():
-    home = os.path.expanduser("~")
-    fn_config = f'{home}/.findadapt_rc'
-    try:
-        with open(fn_config) as f:
-            config = json.load(f)
-    except:
-        config = {}
-
-    config = {k: v.replace('$HOME', home) for k, v in config.items()}
-    # print(config)
-    pw_data_environ = os.environ.get('FINDADAPT_DATA')
-    if not config.get('pw_data') and pw_data_environ:
-        config['pw_data'] = pw_data_environ
-        
-    
-    return config
-
-
 def verify_seq(seq, convert=False):
     seq = seq.strip().upper()
     if re.match(r'^[ATCGU]+$', seq):
@@ -225,11 +262,9 @@ def extend_seq(mat_seq, left_flank, right_flank, primary_padding_dict):
             right_shift += 1
         else:
             break
-
-    if right_shift > 1:
-        right_flank = right_flank[right_shift:]
+    if right_shift > 0:
         mat_seq += right_flank[:right_shift]
-
+        right_flank = right_flank[right_shift:]
 
     # for b1, b2 in zip(left_flank, seq_before_primary):
     #     if b1 == b2:
@@ -237,9 +272,8 @@ def extend_seq(mat_seq, left_flank, right_flank, primary_padding_dict):
     #     else:
     #         break
     # if left_shift:
-    #     left_flank = left_flank[:-left_shift]
     #     mat_seq = left_flank[-left_shift:] + mat_seq
-    # logger.info(f'{mat_seq=}, {left_shift=}, {right_shift=}')
+    #     left_flank = left_flank[:-left_shift]
     return mat_seq, left_flank,  right_flank
 
 def parse_read_seq_mirna_pyahocorasick(seq, aho_model, primary_padding_dict, blocked_seq):
@@ -293,7 +327,6 @@ def pick_3p_adapter(adapter_ct):
             elif ct > adapter_ct_by_seq[seq][1] * 1.5:
                 adapter_ct_by_seq[seq] = [phase, ct]
     
-
     
     for phase in range(max_random_linker):
         try:
@@ -316,12 +349,12 @@ def pick_3p_adapter(adapter_ct):
                 elif ct > lineage[child_seq][idx_ct] * 2:
                     lineage[child_seq] = [seq, phase, ct]
 
-    # logger.info(lineage)
+    if debugmode:
+        logger.info(adapter_ct)
 
-    thres_increase_ratio = 1.05  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
+    thres_increase_ratio = thres_multiplier  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
     res = []
     keep_status = {}
-
 
     empty_adapter_ct = [None, 0] # ele1 = phase, ele2 = count
     for phase in range(max_random_linker + 1):
@@ -372,7 +405,7 @@ def pick_3p_adapter(adapter_ct):
                 if seq_truncated in lineage:
                     parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
                     parent_lb = f'{parent_seq}_{parent_phase}'
-                    if ct < parent_ct * (max(1.3, 1 + 0.1 * parent_phase)):
+                    if ct < parent_ct * (max(thres_increase_ratio, 1 + 0.1 * parent_phase)):
                         skip = 1
                         break
             if skip:
@@ -409,7 +442,7 @@ def pick_3p_adapter(adapter_ct):
     return res_final
 
 
-def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12):
+def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12):
     """
     the reason for include the insert as parameter is that
     sometimes, the three end we got is truncated due to the last several bp of the adapter match with the end of the searched insert sequence.
@@ -424,69 +457,47 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
 
     max_random_linker_range = max_random_linker + 1
     ct = {phase: {} for phase in range(max_random_linker_range)}
-    thres_replace_upper_phase = 1.4
-
-    # step1 , find  possible adapter from first 200 seq
-
-    # get the count for each phase, each sequence
-    # inital seed, collect all possible sequence in the inital run
-
-    inital_n_reads = 1000 # collect all possible seqence in the first n reads
+    # inital_n_reads = 1000 # collect all possible seqence in the first n reads
 
     # i_insert = 'ATCGGGG'
-
     truncated_adapter_map = {}
     available_seq = set()
-
-    def get_ct(data, initial=False):
-        # for _, seq, i_insert in data:  # for split method
-
-        # ct_fraction = 1/(max_borrowed_base + 1)
-        # ct_fraction = 1/(max_borrowed_base)
-        ct_fraction = 1
-
-        # because each read, we will calc no borrow, borrow 1 base, borrow 2base , so the sum of counts of all forms will be much larger than the actual reads count
-        for _, i_insert, seq in data:  # for string subset method
-        # for idata in data:
-            # try:
-            #     _, seq = idata
-            # except:
-            #     logger.error('invalid data found')
-            #     logger.error(idata)
-            #     sys.exit(1)
-
+    # logger.info(max_borrowed_base)
+    
+    def get_ct():
+        ct = {phase: {} for phase in range(max_random_linker_range)}
+        too_short_3p = 0
+        for _, i_insert, seq in parsed_reads:
             # if the 3' region is already too short, skip shifting
             len_adapt = len(seq)
-            if len_adapt < max_random_linker_range:
+            if len_adapt < min(5, max_random_linker):
                 ct[len_adapt].setdefault('', 0)
                 ct[len_adapt][''] += 1
+                too_short_3p += 1
                 continue
-
             for phase in range(max_random_linker_range):
                 ires = ct[phase]
                 if phase < max_borrowed_base:
                     candidate_borrow_seq = i_insert[phase - max_borrowed_base:] + seq[:phase]
                 else:
                     candidate_borrow_seq = seq[phase - max_borrowed_base:phase]
-                
                 borrow_list = range(max_borrowed_base + 1)
-                
                 # avoid duplicate count during the borrow loop
-                counted = {}  # key = seq
-                
-                
+                counted = set()
+
                 for n_borrow in borrow_list:
                     # ct_add,  if the n_borrow == 0, which is the original sequence, will add a complete 1
                     # otherwise, will only add a proportion
+                    ct_add = 1
                     if n_borrow > 0:
                         adapt_seq = candidate_borrow_seq[-n_borrow:] + seq[phase: phase + expected_adapter_len - n_borrow]
-                        ct_add = ct_fraction
                     else:
                         adapt_seq = seq[phase: phase + expected_adapter_len]
-                        ct_add = 1
 
                     len_adapt = len(adapt_seq)
                     # polyN seq
+                    if not len_adapt:
+                        continue
                     if adapt_seq[:10] == adapt_seq[0] * 10:
                         adapt_seq = adapt_seq[:10]
                         available_seq.add(adapt_seq)
@@ -503,34 +514,19 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
                                 available_seq.add(adapt_seq)
                     elif adapt_seq not in available_seq:
                         available_seq.add(adapt_seq)
-                    if initial:
-                        ires.setdefault(adapt_seq, 0)
-                        if counted.get(adapt_seq):
-                            continue
-                        counted[adapt_seq] = True
-                        ires[adapt_seq] += ct_add
-                    else:
-                        # if not the inital run, will ignore the new adapter seq
-                        try:
-                            ires[adapt_seq] += ct_add
-                            if counted.get(adapt_seq):
-                                continue
-                            counted[adapt_seq] = True
-                        except:
-                            pass
+                    ires.setdefault(adapt_seq, 0)
+                    if adapt_seq in counted:
+                        continue
+                    counted.add(adapt_seq)
+                    ires[adapt_seq] += ct_add
+        return ct
 
-
-    get_ct(parsed_reads[:inital_n_reads], initial=True)
-    if len(parsed_reads) > inital_n_reads:
-        get_ct(parsed_reads[inital_n_reads:], initial=False)
-
-    # logger.info(ct)
+    ct = get_ct()
 
     # remove the low count seq and  and shift + borrowed, with exact number as upper unshifted
     # remove the same seq in the higher phase
     dedup = {}
     max_ct = 0
-
     for phase in sorted(ct):
         for seq in list(ct[phase]):
             seq_ct = ct[phase][seq]
@@ -542,10 +538,13 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
             if seq not in dedup:
                 dedup[seq] = seq_ct
             elif seq_ct < dedup[seq] * 1.3:
+                # if the sequence already exist in a lower phase,delete this key
                 del ct[phase][seq]
             else:
+                # replace the item with the same sequence but lower phase, but the count is much smaller than this one
                 dedup[seq] = seq_ct
-    
+                
+    # logger.info(ct)
     # remove the lower than 50% max ct seq
     for phase in sorted(ct):
         for seq in list(ct[phase]):
@@ -589,26 +588,6 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, 
     # then, we'll use the phase=0 version,  because the other "shift" version is just because the 18bp haven't reached the end of the adapter
     # and the phase = 0 is the easiest way to specify the cutadapt argument
 
-    # {0:
-    #     {'AGATCGGAAGAGCACACG': 26644,
-    #     'AAGATCGGAAGAGCACAC': 1150,
-    #     'GAAGATCGGAAGAGCACA': 94,
-    #     'GATCGGAAGAGCACACGT': 3973,
-    #     'GAGATCGGAAGAGCACAC': 4644,
-    #     'TAGATCGGAAGAGCACAC': 18394
-    #     },
-    #  1:
-    #     {'GATCGGAAGAGCACACGT': 26646,
-    #     'AGATCGGAAGAGCACACG': 24822,
-    #     'AAGATCGGAAGAGCACAC': 148,
-    #     'ATCGGAAGAGCACACGTC': 3964,
-    #     'TAGATCGGAAGAGCACAC': 415,
-    #     'TCGGAAGAGCACACGTCT': 1644,
-    #     'GAGATCGGAAGAGCACAC': 37,
-    #     },
-    #  ....
-    #     }
-
     picked_adapter =  pick_3p_adapter(ct)
     if len(picked_adapter) == 0:
         # [seq, phase, ct]
@@ -625,7 +604,6 @@ def infer_5_end_adapter(parsed_reads):
     """
 
     ct = {}  # key = 5' end length
-
     total_reads = len(parsed_reads)
     max_random_linker = 11 
     too_long_lb = f'>{max_random_linker - 1}'
@@ -688,8 +666,6 @@ def parse_fq_reads(fh, parse_read_func, aho_model, primary_padding_dict, blocked
                 continue
             seqraw = fh.readline()[:-1] # seq
         except:
-            # if header is not None:
-            #     logger.error(red(f'read fastq exit: n = {n} header = {header}'))
             end_reached = n
             break
         fh.readline()
@@ -708,8 +684,6 @@ def parse_fq_reads(fh, parse_read_func, aho_model, primary_padding_dict, blocked
         # read range control
         if n_processed > nreads:
             break
-
-    # logger.info(f'processed = {n_processed/1000}, read = {n/1000}')
     return parsed_reads, end_reached, fh
 
 def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=400_000, n_processed_for_too_few=500_000, enough_parsed_reads=100, threads=10, sn=0, fh=None):
@@ -755,8 +729,6 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
     except:
         if chunk_start is not None:
             logger.warning(red(f'file handle not seekable'))
-    # logger.info(green(f'chunk start pos = {fh.tell()}'))
-    # logger.info(f'total_max_reads_to_process = {total_max_reads_to_process/1000000} million, rounds = {rounds}')
 
     for i in range(rounds):  # each round, 100k,  totally 20 million
         logger.debug(f'\t\treading {reads_per_round_str} * {i+1} reads')
@@ -945,85 +917,74 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
     fh = get_file_handle(fn_fq)
     
     n = 0
-    n_reads_check = 1000 # check the 3' adapter in first 1000 reads
+    n_reads_check = 5000 # check the 3' adapter in first 1000 reads
     
     n_found = 0
-    while True:
-        n += 1
-        header = fh.readline()
-        try:
-            # because of random start of the file chunk, the fh may be in the middle of a read
-            if header[0] != '@':
-                logger.warning(f'bad fq format: {header}')
-                continue
-            seqraw = fh.readline()[:-1].upper() # seq
-        except:
-            end_reached = n
-            break
-        fh.readline()
-        fh.readline()
-        
-        if adapter3_seq in seqraw:
-            n_found += 1
-        
-        if n > n_reads_check:
-            break
+    if adapter3_seq and len(adapter3_seq) > 8:
+        while True:
+            n += 1
+            header = fh.readline()
+            try:
+                # because of random start of the file chunk, the fh may be in the middle of a read
+                if header[0] != '@':
+                    logger.warning(f'bad fq format: {header}')
+                    continue
+                seqraw = fh.readline()[:-1].upper() # seq
+            except:
+                end_reached = n
+                break
+            fh.readline()
+            fh.readline()
+            
+            if adapter3_seq in seqraw:
+                n_found += 1
+            
+            if n > n_reads_check:
+                break
     
-    adapter_ratio = round(n_found/ n, 4)
-
-    
-    if adapter_ratio < 0.8:
-        logger.debug(red(f'sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
+        adapter_ratio = round(n_found/ n, 4)
     else:
-        logger.debug(green(f'sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
+        adapter_ratio = 1
+
+    if adapter_ratio < 0.6:
+        logger.debug(red(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
+    else:
+        logger.debug(green(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
         is_dominant = 0
-    
+
     return is_dominant, dominant_seq
 
 
-def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
-
-    initial_seed_len = 15    # for universal adapter found
+def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
     if parsed_reads_prev:
         logger.debug(f'parsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
-    # process the reads
-    # logger.info(f'enough reads = {enough_parsed_reads}')
-    # fq_lb = os.path.basename(fn_fq)
-    # fq_lb1 = fq_lb.replace('.fastq.gz', '').replace('.fastq', '').replace('.gz', '')
 
+    # process the reads
     fq_lb1 = get_fq_lb(fn_fq)
     do_parse_reads = True
 
-    if debugmode:
-        fn_parsed_redas = f'{pw_data}/{fq_lb1}.parsed_reads.pkl'
+    fn_parsed_redas = f'{pw_data}/{fq_lb1}.parsed_reads.pkl'
+    if not force_parse_reads and recursive_round == 0:
+        try:
+            with open(fn_parsed_redas, 'rb') as f:
+                parsed_reads = pickle.load(f)
+            logger.info(f'\t\tusing prev saved parsed_reads {fn_parsed_redas}, n = {len(parsed_reads)}')
+            do_parse_reads = False
+        except:
+            pass
 
-        if not force_parse_reads:
-            try:
-                with open(fn_parsed_redas, 'rb') as f:
-                    parsed_reads = pickle.load(f)
-                logger.info(f'\t\tusing prev saved parsed_reads, n = {len(parsed_reads)}')
-                do_parse_reads = False
-            except:
-                pass
-
-    if fh is not None and recursive_round==0:
+    if fh is not None and recursive_round == 0:
         threads = 1
-
 
     n_processed = -1
     if do_parse_reads:
-        logger.info(f'{enough_parsed_reads=}, {recursive_round=}')
         parsed_reads, n_processed, fh = get_parsed_reads(fn_fq, fh, enough_parsed_reads=enough_parsed_reads, threads=threads, parsed_reads_prev=parsed_reads_prev)
-
-    n_parsed_reads = len(parsed_reads)
     
-    if debugmode:
-        with open(fn_parsed_redas, 'wb') as o:
-            pickle.dump(parsed_reads, o)
+        if debugmode:
+            with open(fn_parsed_redas, 'wb') as o:
+                pickle.dump(parsed_reads, o)
 
-    if debugmode:
-        if args.debug:
             fntmp = f'{fq_lb1}.parsed_reads.txt'
             logger.info(red(f'parsed reads = {fntmp}'))
             with open(fntmp, 'w') as o:
@@ -1039,7 +1000,6 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_p
         logger.warning(f'smallrna ratio:{n_parsed_reads/n_processed:.5f}')
     logger.debug(green(f'total matched reads for inferring = {n_parsed_reads}, n_processed = {n_processed}, matched reads density = {n_processed/n_parsed_reads:.1f}'))
 
-
     # [seq, phase, ct]
     adapter3 = infer_3_end_adapter(parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len)
 
@@ -1047,15 +1007,14 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_p
     # adapter3 = [seq, phase, count]
     adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads)
 
-
     # check for dominant miRNA
     is_dominant, dominant_seq = check_dominant(fn_fq, parsed_reads, adapter3[0][0])
 
     if is_dominant:
         if recursive_round > 3:
-            logger.error(red(f'recusive run round = {recursive_round}, something is wrong, quit now'))
-            sys.exit(1)
-        logger.debug(red(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}'))
+            logger.error(red(f'recusive run round = {recursive_round}, dominant sequence still exist or the identified adapter frequency found in fastq file is too low'))
+            return None
+        logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}')
         if glob_var['blocked_seq'] is None:
             glob_var['blocked_seq'] = {dominant_seq, }
         else:
@@ -1067,7 +1026,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_p
 
     return fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
-def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=50, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12, threads=10, fh=None):
+def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=50, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12, threads=10, fh=None):
 
     # ires is used for recursive run, in case adapter found per fq but no consensus found for gse
     thres_adapter_ratio = 0.1 # the min ratio of reads found this adapter
@@ -1083,23 +1042,6 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
     # fq_adapter , list, each elemnet is fq_lb, total_count, adapter3, adapter5, err_msg_5_end
     # picked, 2 element 3' and 5' adapter, each has 3 element, [seq, phase, ratio]
 
-    # fn_gse_pkl_base = os.path.basename(fn_gse_pkl)
-    # try:
-    #     if not force and not fn_gse_pkl_base.startswith('single'):
-    #         with open(fn_gse_pkl, 'rb') as f:
-    #             ires_prev = pickle.load(f)
-    #     else:
-    #         ires_prev = None
-    # except:
-    #     ires_prev = None
-
-    # if not force and ires_prev is not None:
-    #     logger.info(green(f'\tadapter already got'))
-    #     logger.debug(f'the prev data pickle = {fn_gse_pkl}')
-    #     if ires_prev['fail']:
-    #         logger.warning(red(f'\tprevious adapter not found'))
-    #     return ires_prev
-
     if fh is not None:
         fq_list = ['stdin']
 
@@ -1112,6 +1054,9 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
         if nsam > 0 and n > nsam:
             break
         logger.info(green(f'\tprocessing {fq}'))
+        if not os.path.exists(fq):
+            logger.error(f'file not exist: {fq}')
+            continue
         tmp = main(pw_data, fq, force_parse_reads=force_parse_reads,
         min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh,
         threads=threads,
@@ -1159,7 +1104,6 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
     picked_3 = [None, None, 0] # seq, phase, count
     picked_5 = [None, 0] # phase, count
 
-    logger.info(ires)
     empty_str = [None, None, 0]
     for phase3, v1 in ires[3].items():
         for seq, ct in v1.items():
@@ -1167,19 +1111,18 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
                 if empty_str is None or ct > empty_str[-1] * thres_multiplier:
                     empty_str = [seq, phase, ct]
                 continue
-            if ct > picked_3[-1] * 1.2:
+            if ct > picked_3[-1] * thres_multiplier:
                 picked_3 = [seq, phase, ct]
     if picked_3[0] is None or picked_3[2] * 1.5 < empty_str[2]:
         picked_3 = empty_str
 
     for phase5, ct in ires[5].items():
-        if ct > picked_5[-1] * 1.2:
+        if ct > picked_5[-1] * thres_multiplier:
             picked_5 = [phase5, ct]
 
     if picked_3[0] != '':
         ratio3 = min(round(picked_3[-1] / (total_count - ct_for_empty_3p_seq + 1), 4), 1)
         # logger.info(f'empty ct = {ct_for_empty_3p_seq}, total count = {total_count}, candidate adapter count = {picked_3[-1]}, base = {total_count - ct_for_empty_3p_seq}')
-
     else:
         ratio3 = round(picked_3[-1]/total_count, 4)
     ratio5 = round(picked_5[-1] / total_count, 4)
@@ -1206,20 +1149,39 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=Fa
             ratio3 = ct / total_count
             if ratio3 > thres_adapter_ratio_per_fq:
                 n_ok_fq += 1
-
         if n_ok_fq > len(ires['fq_adapter']) * 0.6 and len(fq_list) > nsam:
             ires['non_universal'] = True
             logger.warning(red(f'\t\t{prj}: each fq file in this dataset may have differnt adapters'))
             logger.info(red(f'\t\tnow getting adapter for all samples'))
-            ires = get_adapter_per_prj(prj, fq_list[nsam:], pw_data, force=True, force_parse_reads=force_parse_reads, nsam=-1, ires=ires, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=None)
-
-
-    # with open(fn_gse_pkl, 'wb') as o:
-    #     pickle.dump(ires, o)
+            ires = get_adapter_per_prj(prj, fq_list[nsam:], pw_data, force_parse_reads=force_parse_reads, nsam=-1, ires=ires, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=None)
 
     return ires
 
-
+def guess_kit(picked):
+    seq3, phase3 = picked[0][:2]
+    phase5 = picked[1][0]
+    
+    if seq3 == '' or seq3 == 'empty':
+        return 'adapters already trimmed'
+    if seq3[:8] == 'A' * 8:
+        seq3 = 'A' * 10
+    elif len(seq3) > 12:
+        seq3 = seq3[:12]
+    
+    lb = f'{seq3}:{phase3}:{phase5}'
+    
+    return {
+        'AAAAAAAAAA:0:3': 'SMARTer/CATS Small RNA-seq Kit',
+        'AACTGTAGGCAC:0:0': 'QIASeq',
+        'AGATCGGAAGAG:0:0': 'NEBNext',
+        'TGGAATTCTCGG:4:4': 'NEXTflex',
+        'TGGAATTCTCGG:0:0': 'Truseq/TailorMix/Lexogen/CleanTag',
+        'ATCTCGTATGCC:0:0': 'illumina smallRNA v1.5',
+    }.get(lb)
+    
+    
+    
+        
 def export_data(data, prj, printonly=False):
         # ires = ires or {'total_count': 0, 'fail': False, 'non_universal': False, 3: {}, 5: {}, 'err': [], 'fq_adapter': [], 'picked': []}
         #     # fail, if set to 1, means that the previous search adapter for this gse failed
@@ -1239,13 +1201,21 @@ def export_data(data, prj, printonly=False):
     res_fq_d = {}
     for gse, v in data.items():
         picked = v['picked']
+        if len(picked) == 0:
+            logger.warning(f'no adapter found for {gse}')
+            continue
+        possible_kit = guess_kit(picked)
+        if possible_kit:
+            logger.info(f'p@\tmost possible kit = {possible_kit}')
+        
+        
         fq_adapter = v['fq_adapter']
         v_lite = {k1: v1 for k1, v1 in v.items() if k1 != 'fq_adapter'}
         if v['non_universal']:
             res.append([gse, 'sample_has_separate_adapters'])
         elif len(picked) == 0:
             res.append([gse, 'no_adapter_found'])
-            logger.info(f'{gse}: {v_lite}')
+            # logger.info(f'{gse}: {v_lite}')
         else:
             if len(v['err']) == 0:
                 err_str = ''
@@ -1270,13 +1240,14 @@ def export_data(data, prj, printonly=False):
                     seq = 'empty'
                 res_fq.append([gse, fq_lb, total_count, '3p', sn, seq, phase, ct, ratio])
 
-
             sn = 0
             for phase, ct in adapter5:
                 sn += 1
                 ratio = round(ct / total_count, 4)
                 res_fq.append([gse, fq_lb, total_count, '5p', sn, '', phase, ct, ratio])
 
+    if len(res_fq) == 1:
+        return [], {}
     if printonly:
         tmp = ['\t'.join(map(str, _)) for _ in res]
         print('proj result\n\t' + '\n\t'.join(tmp))
@@ -1462,17 +1433,29 @@ class AhoCorasick:
 def parse_fa(fn):
     with open(fn) as f:
         res = set()
+        invalid = []
         append = res.add
-        while True:
-            header = f.readline()
-            if not header:
-                break
-            if header[0] != '>':
+        sequence_id = None
+        sequence = ''
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
-            sequence = f.readline().strip()
+            if line.startswith('>'):
+                if sequence_id:
+                    append(sequence)
+                sequence_id = line[1:]
+                sequence = ''
+            else:
+                tmp = verify_seq(line, True)
+                if tmp:
+                    sequence += tmp
+                else:
+                    invalid.append(f'{sequence_id}: {line}')
+        if sequence_id:
             append(sequence)
-    
-    return list(res)
+
+    return list(res), invalid
 
 def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custom_model=False):
     primary_padding_dict = {}
@@ -1490,14 +1473,6 @@ def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custo
         aho = AhoCorasick()
         
     mir_seq_l = []
-    if organism != 'other':
-        if organism == 'hsa' and legacy_mode == True:
-            fn_pkl = f'{pw_script}/data/hsa.selected.refseq.pkl'
-        else:
-            fn_pkl = f'{pw_script}/data/{organism}.refseq.pkl'
-        with open(fn_pkl, 'rb') as f:
-            primary_padding_dict = pickle.load(f)
-        mir_seq_l += list(primary_padding_dict)
 
     if fn_refseq:
         if fn_refseq.endswith('.fa'):
@@ -1515,12 +1490,23 @@ def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custo
                         custom_seq.append(tmp)
                     else:
                         invalid_seq.append(i)
-        if len(custom_seq) > 5000:
-            logger.warning(f'passed reference sequence number is to much: n={len(custom_seq)}, will only use the first 5000 sequences')
+        ntmp = len(custom_seq)
+        if ntmp > 5000:
+            logger.warning(f'passed reference sequence number is to much: n={ntmp}, will only use the first 5000 sequences')
             custom_seq = custom_seq[:5000]
+        else:
+            logger.info(f'customized sequence number = {ntmp}')
         if len(invalid_seq) > 0:
             logger.warning(f'invlaid seq found in {fn_refseq}: n = {len(invalid_seq)}, first 10 = {invalid_seq[:10]}')
         mir_seq_l += custom_seq
+    if organism != 'other':
+        if organism == 'hsa' and legacy_mode == True:
+            fn_pkl = f'{pw_script}/data/hsa.selected.refseq.pkl'
+        else:
+            fn_pkl = f'{pw_script}/data/{organism}.refseq.pkl'
+        with open(fn_pkl, 'rb') as f:
+            primary_padding_dict = pickle.load(f)
+        mir_seq_l += list(primary_padding_dict)
 
     n_words = len(mir_seq_l)
     if n_words == 0:
@@ -1546,27 +1532,14 @@ if __name__ == "__main__":
     gse_map = args.fn_fq_list
     nreads = args.nreads
 
-    if debugmode:
-        force_parse_reads = args.force
-        force = args.force1 or args.force
-    else:
-        force = False
-        force_parse_reads = False
-
     # restrict_gse_list = args.keep or set()
     # restrict_gse_list = set(restrict_gse_list)
     threads = args.threads
     cutadapt = args.cut
     printonly = args.print
 
-    if debugmode:
-        app_config = load_config()
-        pw_data = app_config.get('pw_data') or 'data'
-        os.makedirs(pw_data, exist_ok=True)
-        logger.info(f'{pw_data=}')
-        
-    else:
-        pw_data = None
+    pw_data = 'data'
+    os.makedirs(pw_data, exist_ok=True)
 
     # modify here, set fh as None
     # this just for testing if the stdin fastq content is faster
@@ -1607,8 +1580,10 @@ if __name__ == "__main__":
             print('\n\t' + '\n\t'.join(invalid_fq))
 
     max_random_linker = args.max_random_linker
-    # max_borrowed_base = args.max_borrowed_base
-    max_borrowed_base = 2
+    try:
+        max_borrowed_base = args.borrow
+    except:
+        max_borrowed_base = 2
     expected_adapter_len = args.expected_adapter_len
     min_parsed_reads = args.min_reads
     enough_parsed_reads = args.enough_reads
@@ -1634,6 +1609,12 @@ if __name__ == "__main__":
     force_custom_model = False
     aho_model, primary_padding_dict, pyaho_installed = build_model(organism, fn_refseq, legacy_mode, quiet, force_custom_model)
     
+    # iseq = 'TAGCTTATCAGACTGATGTTGAAGATCGGAAGAGCACACGTCTGAACTCCA'
+    # tmp = parse_read_seq_mirna_pyahocorasick(iseq, aho_model, primary_padding_dict, None)
+
+    # print(tmp)
+    # sys.exit(1)
+    
     if pyaho_installed:
         parse_read_func = parse_read_seq_mirna_pyahocorasick
     else:
@@ -1652,7 +1633,7 @@ if __name__ == "__main__":
         n += 1
         nsam = min(max_check_srr_n, len(fq_list))
         logger.info(green(f'{n}/{n_prj}: {gse} - using {nsam}/ {len(fq_list)} fq files'))
-        ires = get_adapter_per_prj(gse, fq_list, pw_data, force=force,force_parse_reads=force_parse_reads, nsam=nsam, ires=None, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=fh)
+        ires = get_adapter_per_prj(gse, fq_list, pw_data, force_parse_reads=force_parse_reads, nsam=nsam, ires=None, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=fh)
 
         res[gse] = ires
 
