@@ -31,12 +31,17 @@ pip install pyahocorasick
  
 # SYNOPSIS   
 
-      findadapt reads.fastq.gz  # organism = human
-      findadapt reads.fastq.gz -organism mouse  # specify the organism
-      findadapt -list_org  # list the supported organism list and exit
-      findadapt -fn_fq_list  fq_list.txt -organism mouse  # run the first 5 samples of each study to infer the adapter sequence, mouse samples
-      findadapt -fn_fq_list  fq_list.txt -organism mouse -nsam -1 # run all samples of each study to infer the adapter sequence, mouse samples
-      findadapt reads.fastq.gz -pw_cutadapt path/to/cutadapt -cut  # trim the identified adapters using cutadapt package 
+      findadapt reads.fastq.gz
+      findadapt reads.fastq.gz -organism mouse
+      findadapt -list_org
+      #  run the first 5 samples of each study to infer the adapter sequence, mouse samples
+      findadapt -fn_fq_list  fq_list.txt -organism mouse
+
+      # run all samples of each study to infer the adapter sequence, mouse samples
+      findadapt -fn_fq_list  fq_list.txt -organism mouse -nsam -1 
+
+      # trim the identified adapters using cutadapt package 
+      findadapt reads.fastq.gz -pw_cutadapt path/to/cutadapt -cut  
 
 
 # COMMANDS AND OPTIONS  
