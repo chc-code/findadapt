@@ -18,7 +18,7 @@ import pickle, json
 import argparse as arg
 import multiprocessing as mp
 import gzip
-
+from collections import deque
 
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
@@ -440,7 +440,6 @@ def pick_3p_adapter(adapter_ct):
 
     res_final = sorted(dedup.values(), key=lambda _: _[2], reverse=True)
 
-    logger.info(res_final)
     return res_final
 
 
@@ -708,6 +707,13 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
     aho_model = shared_vars['aho_model']
     primary_padding_dict = shared_vars['primary_padding_dict']
     blocked_seq = shared_vars['blocked_seq']
+    mir_seq_l = shared_vars['mir_seq_l']
+    
+    
+    if aho_model is None:
+        aho_model = self_implemented_aho(mir_seq_l)
+        # logger.info(f'now building aho model done')
+    
 
     sn_str = '1' if sn is None else sn
     rounds = int(total_max_reads_to_process/reads_per_round)
@@ -773,7 +779,7 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
     except:
         end_pos = 0
         
-    return parsed_reads, n_processed, fh, end_pos
+    return parsed_reads, n_processed, fh, end_pos, end_reached
 
 
 def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_reads_prev=None):
@@ -808,29 +814,33 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
     blocked_seq = glob_var['blocked_seq']
     
     shared_vars = {
-        'aho_model': aho_model,
+        'aho_model': aho_model if pyaho_installed else None,
+        'mir_seq_l': mir_seq_l,
         'parse_read_func': parse_read_func,
         'primary_padding_dict': primary_padding_dict,
         'blocked_seq': blocked_seq,
     }
     
-    parsed_reads, n_processed, fh, end_pos = process_chunk(fn_fq, shared_vars, None, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=enough_parsed_reads * 400, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)
-    
+    parsed_reads, n_processed, fh, end_pos, end_reached = process_chunk(fn_fq, shared_vars, None, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=enough_parsed_reads * 400, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)
+            
 
     logger.debug(green(f'new parsed reads = {len(parsed_reads)}'))
     if parsed_reads_prev:
         parsed_reads += parsed_reads_prev
         logger.debug(green(f'extended parsed reads = {len(parsed_reads)}'))
 
-    if len(parsed_reads) > enough_parsed_reads_orig:
-        logger.info(green(f'the fastq is rich in expected sequence!'))
+    if len(parsed_reads) > max(enough_parsed_reads_orig//2, 300):
+        logger.info(green(f'matched reads found: {len(parsed_reads)}'))
+        return parsed_reads, n_processed, fh
+
+    if end_reached:
+        logger.info(f'file has been fully read, total reads = {n_processed}, matched reads = {len(parsed_reads)}')
         return parsed_reads, n_processed, fh
 
     # get half 
-    enough_parsed_reads_orig = max(enough_parsed_reads_orig//3, 300)
+    enough_parsed_reads_orig = max(enough_parsed_reads_orig//2, 300)
     enough_parsed_reads = enough_parsed_reads_orig
-    
-    
+        
     if threads == 1:
         logger.info('single core mode')
         parsed_reads_new, n_processed_new = process_chunk(fn_fq, shared_vars, end_pos, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=n_processed_for_too_few, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)[:2]
@@ -844,7 +854,7 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
         parsed_reads = []
 
     n_processed_for_too_few -= n_processed
-
+    
     logger.debug(f'\t\ttest run end_pos = {end_pos/1024/1024:.2f},  current remaining matched reads to collect = {enough_parsed_reads}')
 
     n_tasks = min(threads, mp.cpu_count())
@@ -858,7 +868,7 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
         chunk_results = p.starmap(process_chunk, chunk_args)
 
     sn_thread = 0
-    for i, i_n_processed, _fh, _endpos in chunk_results:
+    for i, i_n_processed, _fh, _endpos, end_reached in chunk_results:
         parsed_reads.extend(i)
         n_processed += i_n_processed
     return parsed_reads, n_processed, fh
@@ -1400,7 +1410,22 @@ class TrieNode:
         self.is_end_of_word = False
         self.fail = None
         self.output = []
+    def __reduce__(self):
+        # return a tuple of class_name to call,
+        # and optional parameters to pass when re-creating,
+        # and the object state
+        return (self.__class__, (), self.__getstate__())
 
+    def __getstate__(self):
+        # return a dictionary of attributes to pickle
+        return {'children': self.children, 'is_end_of_word': self.is_end_of_word, 'fail': self.fail, 'output': self.output}
+
+    def __setstate__(self, state):
+        # restore the object state from the pickled data
+        self.children = state['children']
+        self.is_end_of_word = state['is_end_of_word']
+        self.fail = state['fail']
+        self.output = state['output']
 class AhoCorasick:
     def __init__(self):
         self.root = TrieNode()
@@ -1466,6 +1491,14 @@ def parse_fa(fn):
 
     return list(res), invalid
 
+
+def self_implemented_aho(mir_seq_l):
+    aho = AhoCorasick()
+    for s in mir_seq_l:
+        aho.add_word(s)
+    aho.build()
+    return aho
+
 def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custom_model=False):
     primary_padding_dict = {}
 
@@ -1478,8 +1511,6 @@ def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custo
         except:
             if not quiet:
                 logger.warning(f'pyahocorasick package not installed, now using self-implemented Aho-Corasick algorithm. Installing of this package by "pip install pyahocorasick" is recommended (but not required), to suppress this warning, use -quite / -q')
-    if not installed:
-        aho = AhoCorasick()
         
     mir_seq_l = []
 
@@ -1525,14 +1556,14 @@ def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custo
         logger.warning(f'refseq number too few: {n_word}')
 
     if installed:
-        for idx, substring in enumerate(mir_seq_l):
+        for substring in mir_seq_l:
             aho.add_word(substring, substring)
         aho.make_automaton()
     else:
-        for s in custom_seq:
-            aho.add_word(s)
-        aho.build()
-    return aho, primary_padding_dict, installed
+        # aho = self_implemented_aho(mir_seq_l)
+        aho = None
+
+    return aho, primary_padding_dict, installed, mir_seq_l
 
 
 if __name__ == "__main__":
@@ -1615,8 +1646,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     legacy_mode = args.human_selected  # if true, will use the old parsing function, which will use the top 100 most expressed miRNA in human as the reference, 
-    force_custom_model = False
-    aho_model, primary_padding_dict, pyaho_installed = build_model(organism, fn_refseq, legacy_mode, quiet, force_custom_model)
+    force_custom_model = True
+    aho_model, primary_padding_dict, pyaho_installed, mir_seq_l = build_model(organism, fn_refseq, legacy_mode, quiet, force_custom_model)
     
     # iseq = 'TAGCTTATCAGACTGATGTTGAAGATCGGAAGAGCACACGTCTGAACTCCA'
     # tmp = parse_read_seq_mirna_pyahocorasick(iseq, aho_model, primary_padding_dict, None)
