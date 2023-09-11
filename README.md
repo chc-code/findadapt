@@ -29,29 +29,32 @@ To achieve the best performance, installation of pyahocorasick is highly recomme
 pip install pyahocorasick
 ```
  
-# Usage   
-   
-The usage can be accessed by   
-`findadapt -h`   
-If your input data are human small RNA seq, you just need to specify the parameters in the `Main arguments` section below   
+# SYNOPSIS   
 
-## Main arguments    
+      findadapt reads.fastq.gz  # organism = human
+      findadapt reads.fastq.gz -organism mouse  # specify the organism
+      findadapt -list_org  # list the supported organism list and exit
+      findadapt -fn_fq_list  fq_list.txt -organism mouse  # run the first 5 samples of each study to infer the adapter sequence, mouse samples
+      findadapt -fn_fq_list  fq_list.txt -organism mouse -nsam -1 # run all samples of each study to infer the adapter sequence, mouse samples
+      findadapt reads.fastq.gz -pw_cutadapt path/to/cutadapt -cut  # trim the identified adapters using cutadapt package 
+
+
+# COMMANDS AND OPTIONS  
+
+## File input
 You can only select one option (either `-fq` or `-prj`) as the input
 
 - `fn_fq_file`   Optional positional argument,  the path for single fastq file   
-- `-fn_fq_list / -list / -l file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path.  -fq and -prj are mutually exlusive   
+- `-fn_fq_list / -list / -l file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path. 
 
-## Optional arguments
-
-###  customize reference   
-By default, the reference is most abundant 100 miRNA in human. you can also useyour own sequence list if the your input doesn't match the default reference setting, available options are   
-
+## Reference sequences
+Can be user specified sequence list (fasta format or one sequence per line) or organism name by `-organism`
 - `-fn_refseq filename`  User specified sequence known to express in the dataset, can be fasta format or one sequence per line.   
 - `-organism / -org str` organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other
 - `-list_org`  list the supported organism and exit
 
 
-### Output options   
+## Output options   
 - `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file
 - `-quiet / -q` , toggle, suppress the pyahocorasick not installed warning
 - `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
@@ -59,13 +62,12 @@ By default, the reference is most abundant 100 miRNA in human. you can also usey
 - `-v / -verbose` flag, display the full logging information in the terminal   
    
    
-### Run control
-
+## Other Options
 - `-expected_adapter_len int`  expected adapter length to discover, by default, 12 nt   
-- `-max_random_linker int`   max allowed random seqence length, default = 6
+- `-max_random_linker int`   max allowed random seqence length, default = 8
 - `-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1
 - `-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
-- `-thres_multiplier float`    the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporting each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including 
+- `-thres_multiplier float`    the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporting each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including, default=1.2
 
 - `-min_reads int`  minimum matched reads number for infering per fastq file, default=30, if lower than this value, the adapter inferring step will be skip, you may need to check the reference settings.   
 - `-threads / -cpu int` the threads to use, by default = 5. Usually, the performance won't improve greatly when more than 5 threads are used (refer to the manuscript for detail)   
