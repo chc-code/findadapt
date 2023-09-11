@@ -617,7 +617,7 @@ def infer_5_end_adapter(parsed_reads, adapter3):
         else:
             ct.setdefault(too_long_lb, 0)
             ct[too_long_lb] += 1
-    phase_3_ct = ct.get(3)
+    phase_3_ct = ct.get(3) or 0
 
     try:
         ct = sorted(ct.items(), key=lambda _: _[1], reverse=True)
@@ -631,7 +631,7 @@ def infer_5_end_adapter(parsed_reads, adapter3):
     except:
         pass
     else:
-        if adapter3_seq.startswith('A' * 8) and ct[0][0] != 0:
+        if adapter3_seq.startswith('A' * 8) and phase_3_ct > 0:
             return [[3, phase_3_ct or max_ct]], None
 
     ct = [_ for _ in ct if _[1] > max_ct * 0.1]
