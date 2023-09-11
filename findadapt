@@ -34,7 +34,7 @@ ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
 ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 6""", type=int, default=6)
 ps.add_argument('-expected_adapter_len', '-adapt_len', help="""expected adapter len to discover, default = 12 nt""", type=int, default=12)
 ps.add_argument('-thres_multiplier', '-thres', help="""the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporthing each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including unnecessary random sequence due to sporadic minor count difference, default is 1.2""", type=float, default=1.2)
-ps.add_argument('-min_reads', '-min', help="""minimum matched reads number for infering per fastq file, default=50""", type=int, default=50)
+ps.add_argument('-min_reads', '-min', help="""minimum matched reads number for infering per fastq file, default=30""", type=int, default=30)
 ps.add_argument('-threads', '-cpu', help="""threads to use, default=5, the speed won't improve when threads is more than 5""", type=int, default=5)
 ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000""", type=int, default=1000)
 ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
@@ -43,6 +43,7 @@ ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is se
 ps.add_argument('-debug', help="""debug mode, will write the parsed reads to pickle file""", action='store_true')
 ps.add_argument('-borrow', '-b',  help="""max borrow base length, default is 2""", type=int, default=2)
 ps.add_argument('-force', '-f',  help="""ignore the existing parsed reads pickle file (gererated when using  -debug), parse reads from scratch""", action='store_true')
+ps.add_argument('-human_selected', help="""only use the most expressed 100 miRNA, only valid when organism is human""", action='store_true')
 
 benchmode = False
 
@@ -324,8 +325,8 @@ def pick_3p_adapter(adapter_ct):
         for seq, ct in adapter_ct[phase].items():
             if seq not in adapter_ct_by_seq:
                 adapter_ct_by_seq[seq] = [phase, ct]
-            elif ct > adapter_ct_by_seq[seq][1] * 1.5:
-                adapter_ct_by_seq[seq] = [phase, ct]
+            elif ct > adapter_ct_by_seq[seq][1]:
+                adapter_ct_by_seq[seq][1] = ct
     
     
     for phase in range(max_random_linker):
@@ -349,13 +350,11 @@ def pick_3p_adapter(adapter_ct):
                 elif ct > lineage[child_seq][idx_ct] * 2:
                     lineage[child_seq] = [seq, phase, ct]
 
-    if debugmode:
-        logger.info(adapter_ct)
-
-    thres_increase_ratio = thres_multiplier  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
     res = []
     keep_status = {}
-
+    polyA_ct = 0
+    polyA_seq = 'A' * 8
+    max_ct = 0
     empty_adapter_ct = [None, 0] # ele1 = phase, ele2 = count
     for phase in range(max_random_linker + 1):
         # select the top 5 sequence
@@ -364,39 +363,41 @@ def pick_3p_adapter(adapter_ct):
         except:
             continue
         for seq, ct in top5_seq:
+            if ct > max_ct:
+                max_ct = ct
+            if seq.startswith(polyA_seq) and ct > polyA_ct:
+                polyA_ct = ct
+            phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
+            if phase <= phase_tmp and ct_tmp > ct:
+                ct = ct_tmp
+            if phase == 0:
+                res.append([seq, phase, ct])
+                continue
             skip = 0
-
             for seq_tmp, v_tmp in adapter_ct_by_seq.items():
                 if seq_tmp == seq and phase == v_tmp[0]:
                     # itself
                     continue
-                
                 if seq_tmp == seq and phase > v_tmp[0]:
                     # same sequence, but other has smaller phase
                     skip = 1
                     break
-                
                 if seq in seq_tmp and phase >= v_tmp[0]:
                     # is a subsequence of the upper level sequence
                     skip = 1
                     break
             if skip:
                 continue
-            
-            
-            if phase == 0:
-                res.append([seq, phase, ct])
-                continue
 
             # there are 3 cases
-            # 1 = parent found,  parent kept - compare the current count with parent count, if larger than parent_ct * thres_increase_ratio, then keep current, drop parent
+            # 1 = parent found,  parent kept - compare the current count with parent count, if larger than parent_ct * thres_multiplier, then keep current, drop parent
             # 2 = parent found, parent = drop -  drop
             # 3 = parent not found - keep
             current_lb = f'{seq}_{phase}'
 
             # for the empty adapter,
             if seq == '':
-                if ct > empty_adapter_ct[1] * thres_increase_ratio:
+                if ct > empty_adapter_ct[1] * thres_multiplier:
                     empty_adapter_ct[1] = ct
                     empty_adapter_ct[0] = phase
                 continue
@@ -405,18 +406,19 @@ def pick_3p_adapter(adapter_ct):
                 if seq_truncated in lineage:
                     parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
                     parent_lb = f'{parent_seq}_{parent_phase}'
-                    if ct < parent_ct * (max(thres_increase_ratio, 1 + 0.1 * parent_phase)):
+                    if ct < parent_ct * (max(thres_multiplier, 1 + 0.1 * parent_phase)):
                         skip = 1
                         break
             if skip:
                 continue
             res.append([seq, phase, ct])
 
-
-    # logger.info(keep_status)
+    if polyA_ct > max_ct * 0.4:
+        return [['A' * 10, 0, polyA_ct]]
+        
     if empty_adapter_ct[0] is not None:
         res.append([''] + empty_adapter_ct)
-
+    
     try:
         res = sorted(res, key=lambda _: _[1], reverse=True)
         max_ct = res[0][idx_ct]
@@ -438,7 +440,7 @@ def pick_3p_adapter(adapter_ct):
 
     res_final = sorted(dedup.values(), key=lambda _: _[2], reverse=True)
 
-    # logger.info(res_final)
+    logger.info(res_final)
     return res_final
 
 
@@ -596,7 +598,7 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=1, 
     return picked_adapter
 
 
-def infer_5_end_adapter(parsed_reads):
+def infer_5_end_adapter(parsed_reads, adapter3):
     """
     the bigest difference is that, the 5' end, usually, the seq is empty or 0-8 bp
     here is the preliminary version, only can infer how many fixed bp need to be removed arbituaryly
@@ -615,15 +617,22 @@ def infer_5_end_adapter(parsed_reads):
         else:
             ct.setdefault(too_long_lb, 0)
             ct[too_long_lb] += 1
-    too_long = ct.get(too_long_lb) or 0
-    too_long_ratio = too_long / total_reads
-    # if too_long_ratio > 0.6:
-    #     return [['NA', 0]], f'5\'end too long, total_reads = {total_reads}, len(5 end) > {max_random_linker} bp = {too_long}, ratio = {too_long_ratio:.3f}'
+    phase_3_ct = ct.get(3)
+
     try:
         ct = sorted(ct.items(), key=lambda _: _[1], reverse=True)
         max_ct = ct[0][1]
     except:
         return [['NA', 0]], 'cannot get the 5 end seq count'
+    if debugmode:
+        logger.info(ct)
+    try:
+        adapter3_seq = adapter3[0][0]
+    except:
+        pass
+    else:
+        if adapter3_seq.startswith('A' * 8) and ct[0][0] != 0:
+            return [[3, phase_3_ct or max_ct]], None
 
     ct = [_ for _ in ct if _[1] > max_ct * 0.1]
     return ct, None
@@ -946,7 +955,7 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
     else:
         adapter_ratio = 1
 
-    if adapter_ratio < 0.6:
+    if adapter_ratio < 0.4:
         logger.debug(red(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
     else:
         logger.debug(green(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
@@ -955,7 +964,7 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
     return is_dominant, dominant_seq
 
 
-def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
     if parsed_reads_prev:
         logger.debug(f'parsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
@@ -1005,7 +1014,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_p
 
     # adapter 5 = [phase, count]
     # adapter3 = [seq, phase, count]
-    adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads)
+    adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads, adapter3)
 
     # check for dominant miRNA
     is_dominant, dominant_seq = check_dominant(fn_fq, parsed_reads, adapter3[0][0])
@@ -1026,7 +1035,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_p
 
     return fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
-def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=50, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12, threads=10, fh=None):
+def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=30, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12, threads=10, fh=None):
 
     # ires is used for recursive run, in case adapter found per fq but no consensus found for gse
     thres_adapter_ratio = 0.1 # the min ratio of reads found this adapter
@@ -1605,7 +1614,7 @@ if __name__ == "__main__":
         logger.error(f'ref seq file not exist: {fn_refseq}')
         sys.exit(1)
 
-    legacy_mode = False  # if true, will use the old parsing function, which will use the top 100 most expressed miRNA in human as the reference, 
+    legacy_mode = args.human_selected  # if true, will use the old parsing function, which will use the top 100 most expressed miRNA in human as the reference, 
     force_custom_model = False
     aho_model, primary_padding_dict, pyaho_installed = build_model(organism, fn_refseq, legacy_mode, quiet, force_custom_model)
     
