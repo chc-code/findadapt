@@ -11,7 +11,24 @@ FindAdapt do not depend on prior knowledge about the adapter, so it can also cor
 We also tested the package on fastq files from 3148 biosamples which covers different library prepartion kits, adapter pattern and reads structure, FindAdapt can correctly identify the adapter sequences.   
    
 FindAdapt is written in Python3 and is a stand-alone script without any package requirements (If need to trim fastq file after adapter detection, you need to install cutadapt package first).   
-   
+
+# Installation
+FindAdapt is dependency-free python package (python >=3.6), you can download the code of this repo and use it directly:
+
+```bash
+wget https://github.com/chc-code/findadapt/archive/refs/heads/master.zip
+unzip master.zip  # the output folder will be findadapt-master
+
+# use FindAdapt
+cd findadapt-master
+./findadapt  -h
+```
+## pyahocorasick
+To achieve the best performance, installation of pyahocorasick is highly recommended using
+```
+pip install pyahocorasick
+```
+ 
 # Usage   
    
 The usage can be accessed by   
@@ -64,7 +81,64 @@ Here we provided several fastq files from 3 studies
 3. GSE137617, SMARTer library preparation kit, the 3' adapter sequence of the reads is polyA, and have multiple (usually 3 nt) random sequence at the 5' end   
    
 you can run get the adapter by   
-`./findadapt -fq <fn_fq>`   
+`./findadapt <fn_fq>`   
    
  for example, GSE122068.nextflex.SRR8144939.truncated.fastq.gz   
- `./findadapt -fq ./demo/GSE122068.nextflex.SRR8144939.truncated.fastq.gz`   
+ `./findadapt ./demo/GSE122068.nextflex.SRR8144939.truncated.fastq.gz`   
+
+ # Output Format
+ ## log information
+ ```
+ 2023-09-08 08:13:02  INFO   <module>              line: 1683   1/1: single - using 1/ 1 fq files
+2023-09-08 08:13:02  INFO   get_adapter_per_prj   line: 1076   	processing GSE122068.nextflex.SRR8144939.truncated.fastq.gz
+2023-09-08 08:13:02  INFO   get_parsed_reads      line: 834    matched reads found: 1177
+2023-09-08 08:13:02  INFO   export_data           line: 1229   	most possible kit = NEXTflex
+2023-09-08 08:13:02  INFO   export_data           line: 1289   result per-prj = GSE122068.nextflex.SRR8144939.truncated.adapter.txt
+2023-09-08 08:13:02  INFO   export_data           line: 1290   result per-fq = GSE122068.nextflex.SRR8144939.truncated.per_fq.adapter.txt
+```
+## .adapter.txt
+The output contains the following columns
+**Prj**: The output prefix, if the input is a single fastq file rather than a fastq file list (-fn_fq_list), it will be "single"
+**total_reads**: Total matched reads used for adapter identification
+**3p_seq**:  The sequence of 3' adapter
+**3p_phase**: the random sequence length before 3' adapter
+**3p_count / 3p_reatio**: The number and ratio of reads supporting this 3' adapter sequence and random sequence length
+**5p_phase**:  the random sequence length before the insert
+**5p_count / 5p_ratio**:  The number and ratio of reads supporting this 5' random sequence length 
+**err**:  the error information if fail to get the adapter sequence, 
+
+You can remove the adapter using the identified pattern by specifying `-cut` 
+Or use the output to build your own cutadapt command.
+
+```
+# if 3p_seq is empty and 5p_phase > 0:
+{pw_cutadapt} -u {5p_phase} -m 15 -j 8  --trim-n {fn_fq} -o {fn_out}
+
+# elif 3p seq is not empty and 5p_phase = 3p_phase = 0
+{pw_cutadapt} -a {seq_3p} -m 15 -j 8  --trim-n  {fn_fq} -o {fn_out}
+
+# if 3p_phase > 0 and 5p_phase == 0
+{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -m 15 -o {fn_out}
+
+# if 3p_phase = 0 and 5p_phase > 0
+{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u {5p_phase} -m 15 -o {fn_out}
+
+# if 3p_phase > 0 and 5p_phase > 0
+{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -u {5p_phase} -m 15 -o {fn_out}
+```
+
+
+| prj    | total_reads | 3p_seq       | 3p_phase | 3p_count | 3p_ratio | 5p_phase | 5p_count | 5p_ratio | err |
+|--------|-------------|--------------|----------|----------|----------|----------|----------|----------|-----|
+| single | 1177        | TGGAATTCTCGG | 4        | 1021     | 0.8667   | 4        | 1143     | 0.9711   |
+
+
+## .per_fq.adapter.txt
+The detail adaoter information of every input fastq file
+
+| prj    | fastq                                   | total_reads | side | sn | seq          | phase | count | ratio  |
+|--------|-----------------------------------------|-------------|------|----|--------------|-------|-------|--------|
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 1  | TGGAATTCTCGG | 4     | 1021  | 0.8675 |
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 2  | CTGGAATTCTCG | 3     | 633   | 0.5378 |
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 5p   | 1  |              | 4     | 1143  | 0.9711 |
+
