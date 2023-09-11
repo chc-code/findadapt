@@ -79,9 +79,11 @@ def get_padding_seq(data, mat_data):
 
 
 def prepare_refseq():
-    valid_organism = {'pma', 'pbv', 'mdm', 'zma', 'dvi', 'tgu', 'stu', 'oha', 'cgr', 'lja', 'ggo', 'ami', 'dre', 'aly', 'prd', 'ptc', 'cpi', 'cli', 'efu', 'ath', 'chi', 'cel', 'aca', 'cfa', 'ssc', 'dme', 'cja', 'hpo', 'ssa', 'gmo', 'bdi', 'cin', 'ppc', 'bmo', 'ocu', 'ptr', 'tca', 'pab', 'dno', 'oan', 'ppy', 'pal', 'cpo', 'eca', 'oni', 'osa', 'mtr', 'gma', 'rno', 'mml', 'bta', 'mdo', 'gga', 'mmu', 'hsa'}
+    # valid_organism = {'pma', 'pbv', 'mdm', 'zma', 'dvi', 'tgu', 'stu', 'oha', 'cgr', 'lja', 'ggo', 'ami', 'dre', 'aly', 'prd', 'ptc', 'cpi', 'cli', 'efu', 'ath', 'chi', 'cel', 'aca', 'cfa', 'ssc', 'dme', 'cja', 'hpo', 'ssa', 'gmo', 'bdi', 'cin', 'ppc', 'bmo', 'ocu', 'ptr', 'tca', 'pab', 'dno', 'oan', 'ppy', 'pal', 'cpo', 'eca', 'oni', 'osa', 'mtr', 'gma', 'rno', 'mml', 'bta', 'mdo', 'gga', 'mmu', 'hsa'}
     
     mature_data_all = get_all_miRNA_seq()
+    valid_organism = {_.split('-', 1)[0] for _ in mir['mature'] if not _.startswith('mimat')} # 271 species
+
     for prefix in valid_organism:
         mat_data = [v for k, v in mature_data_all['mature'].items() if k[:3] == prefix]
         ref_data = get_padding_seq(mature_data_all, mat_data)
