@@ -34,6 +34,7 @@ pip install pyahocorasick
       findadapt reads.fastq.gz
       findadapt reads.fastq.gz -organism mouse
       findadapt -list_org
+      
       #  run the first 5 samples of each study to infer the adapter sequence, mouse samples
       findadapt -fn_fq_list  fq_list.txt -organism mouse
 
