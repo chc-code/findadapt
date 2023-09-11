@@ -1,0 +1,1667 @@
+#! /usr/bin/env python3
+"""
+infer the adapter sequence from the RNA-seq fastq file
+discovery mode, pre-knowledge about the adapter sequence is not required
+this script can also handle the random sequence between insert and adapter
+
+####### updates #######
+2023-01-29 update, fix the situation when one miRNA dominate the matched reads
+2023-04-01, disable the dump parsed reads by default
+
+"""
+
+bench = {}
+import time
+import os, sys, re
+import pickle, json
+# from subprocess import Popen, PIPE
+import argparse as arg
+import multiprocessing as mp
+import gzip
+
+debugmode = True
+
+from argparse import RawTextHelpFormatter
+ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
+ps.add_argument('fq', help="""single fastq file path""")
+ps.add_argument('-fn_fq_list', help="""2 column text file , col1 = prj_id, col2 = fq file path""")
+ps.add_argument('-o',  '-out', help="""output prefix""")
+ps.add_argument('-quiet', '-q',  help="""suppress the pyahocorasick not installed warning""", action='store_true')
+ps.add_argument('-fn_refseq', help="""file name for known expressed sequence,  in fasta format or one sequence per line.""", nargs='?')
+ps.add_argument('-organism', '-org', help="""organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other """, default='human')
+ps.add_argument('-nreads', '-n', help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
+ps.add_argument('-nsam', '-ns', help="""how many samples used to check, if all, use -1, only valid for -gse, default=5""", default=5, type=int)
+ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
+ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 6""", type=int, default=6)
+ps.add_argument('-expected_adapter_len', '-adapt_len', help="""expected adapter len to discover, default = 12 nt""", type=int, default=12)
+ps.add_argument('-thres_multiplier', '-thres' help="""the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporthing each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including unnecessary random sequence due to sporadic minor count difference, default is 1.2""", type=int, default=1.2)
+ps.add_argument('-min_reads', '-min', help="""minimum matched reads number for infering per fastq file, default=50""", type=int, default=50)
+ps.add_argument('-threads', '-cpu', help="""threads to use, default=5, the speed won't improve when threads is more than 5""", type=int, default=5)
+ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000""", type=int, default=1000)
+ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
+ps.add_argument('-print', '-printonly', '-p', help="""print only, do not write to file""", action='store_true')
+ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is search from PATH""")
+
+benchmode = False
+if debugmode:
+    ps.add_argument('-force1', '-f1',  help="""only rerun the infer adapter seq, don't re-parse the fastq file""", action='store_true')
+    ps.add_argument('-debug', '-d',  help="""debug mode""", action='store_true')
+    ps.add_argument('-force', '-f',  help="""force parse the reads from fq, ignore previous parsed_read""", action='store_true')
+
+args = ps.parse_args()
+
+pw_script = os.path.dirname(os.path.realpath(__file__))
+
+verbose = args.v
+thres_multiplier = args.thres_multiplier
+
+glob_var = {'blocked_seq': None}
+
+import logging
+
+if not benchmode:
+    prefix =  args.o or 'findadapter'
+    fn_log = f'{prefix}.log'
+
+    fmt = logging.Formatter('%(asctime)s  %(levelname)-6s %(funcName)-20s  line: %(lineno)-5s  %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    console_level = 'DEBUG' if verbose else 'INFO'
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(fmt)
+    console.setLevel(console_level)
+
+    fh_file = logging.FileHandler(fn_log, mode='w', encoding='utf8')
+
+    fh_file.setLevel('DEBUG')
+    fh_file.setFormatter(fmt)
+
+    try:
+        logger = logging.getLogger(__file__)
+    except:
+        logger = logging.getLogger('terminal')
+    logger.setLevel('DEBUG')
+    logger.addHandler(console)
+    logger.addHandler(fh_file)
+else:
+    starttime = time.time()
+
+    logger = logging.getLogger(__file__)
+    logger.setLevel('WARNING')
+
+platform = sys.platform
+
+
+def colored(text, color=None, on_color=None, attrs=None):
+    # Copyright (c) 2008-2011 Volvox Development Team
+    #
+    # Permission is hereby granted, free of charge, to any person obtaining a copy
+    # of this software and associated documentation files (the "Software"), to deal
+    # in the Software without restriction, including without limitation the rights
+    # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    # copies of the Software, and to permit persons to whom the Software is
+    # furnished to do so, subject to the following conditions:
+    #
+    # The above copyright notice and this permission notice shall be included in
+    # all copies or substantial portions of the Software.
+    #
+    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    # AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    # THE SOFTWARE.
+    #
+    # Author: Konstantin Lepa <konstantin.lepa@gmail.com>
+
+    ATTRIBUTES = dict(
+            list(zip([
+                'bold',
+                'dark',
+                '',
+                'underline',
+                'blink',
+                '',
+                'reverse',
+                'concealed'
+                ],
+                list(range(1, 9))
+                ))
+            )
+    del ATTRIBUTES['']
+
+
+    HIGHLIGHTS = dict(
+            list(zip([
+                'on_grey',
+                'on_red',
+                'on_green',
+                'on_yellow',
+                'on_blue',
+                'on_magenta',
+                'on_cyan',
+                'on_white'
+                ],
+                list(range(40, 48))
+                ))
+            )
+
+
+    COLORS = dict(
+            list(zip([
+                'grey',
+                'red',
+                'green',
+                'yellow',
+                'blue',
+                'magenta',
+                'cyan',
+                'white',
+                ],
+                list(range(30, 38))
+                ))
+            )
+
+
+    RESET = '\033[0m'
+    if os.getenv('ANSI_COLORS_DISABLED') is None:
+        fmt_str = '\033[%dm%s'
+        if color is not None:
+            text = fmt_str % (COLORS[color], text)
+
+        if on_color is not None:
+            text = fmt_str % (HIGHLIGHTS[on_color], text)
+
+        if attrs is not None:
+            for attr in attrs:
+                text = fmt_str % (ATTRIBUTES[attr], text)
+
+        text += RESET
+    return text
+
+def red(s):
+    return colored(s, 'red', attrs=['bold'])
+def green(s):
+    return colored(s, 'green', attrs=['bold'])
+
+def load_config():
+    home = os.path.expanduser("~")
+    fn_config = f'{home}/.findadapt_rc'
+    try:
+        with open(fn_config) as f:
+            config = json.load(f)
+    except:
+        config = {}
+
+    config = {k: v.replace('$HOME', home) for k, v in config.items()}
+    # print(config)
+    pw_data_environ = os.environ.get('FINDADAPT_DATA')
+    if not config.get('pw_data') and pw_data_environ:
+        config['pw_data'] = pw_data_environ
+        
+    
+    return config
+
+
+def verify_seq(seq, convert=False):
+    seq = seq.strip().upper()
+    if re.match(r'^[ATCGU]+$', seq):
+        if convert:
+            return re.sub('U', 'T', seq)
+        return seq
+    return None
+
+
+def get_prj_lb(fn):
+    fn = os.path.basename(fn)
+    return re.sub(r'(_L\d{3}.*)?(_R[12])?(\.(fastq|fq))?(\.gz)?', '', fn)
+
+
+def extend_seq(mat_seq, left_flank, right_flank, primary_padding_dict):
+    seq_before_primary, seq_after_primary = primary_padding_dict.get(mat_seq)
+    right_shift = 0
+    left_shift = 0
+    for b1, b2 in zip(right_flank, seq_after_primary):
+        if b1 == b2:
+            right_shift += 1
+        else:
+            break
+
+    if right_shift > 1:
+        right_flank = right_flank[right_shift:]
+        mat_seq += right_flank[:right_shift]
+
+
+    # for b1, b2 in zip(left_flank, seq_before_primary):
+    #     if b1 == b2:
+    #         left_shift += 1
+    #     else:
+    #         break
+    # if left_shift:
+    #     left_flank = left_flank[:-left_shift]
+    #     mat_seq = left_flank[-left_shift:] + mat_seq
+    # logger.info(f'{mat_seq=}, {left_shift=}, {right_shift=}')
+    return mat_seq, left_flank,  right_flank
+
+def parse_read_seq_mirna_pyahocorasick(seq, aho_model, primary_padding_dict, blocked_seq):
+    # use the pyahocorasick package, faster than the self constructed model
+    for idx_last_char, mat_seq in aho_model.iter(seq):
+        # (25,  'TGAGGTAGTAGGTTGTGTGGTT')
+        if blocked_seq and mat_seq in blocked_seq:
+            return None
+        right_flank = seq[idx_last_char + 1:]
+        left_flank = seq[:idx_last_char - len(mat_seq) + 1]
+        if mat_seq in primary_padding_dict:
+            mat_seq, left_flank, right_flank = extend_seq(mat_seq,  left_flank, right_flank, primary_padding_dict)
+        return [left_flank, mat_seq, right_flank]
+
+def parse_read_seq_mirna_custom(seq, aho_model, primary_padding_dict, blocked_seq):
+    # use the self constructed aho-corasick model
+    match = aho_model.search(seq)
+    if match:
+        # [mat_seq, seq_before, seq_after]
+        mat_seq, left_flank, right_flank = match
+        if blocked_seq and mat_seq in blocked_seq:
+            return None
+        if mat_seq in primary_padding_dict:
+            mat_seq, left_flank,  right_flank = extend_seq(mat_seq, left_flank, right_flank, primary_padding_dict)
+        return [left_flank, mat_seq, right_flank]
+
+
+def pick_3p_adapter(adapter_ct):
+    """
+    adapter_ct is a dict, k = 0-6, which means the shift of base from the insert 3' or 5' end
+    because the searched adapter length is around 18bp, and usually, the actual adapter length is longer than that, so we'll see that, even we shift several bp, the supported reads number are still similar
+    """
+
+    # build the linage
+    lineage = {}
+
+    logger.debug(f'raw adapter count: \n{adapter_ct}')
+
+    max_random_linker = max(adapter_ct)
+    idx_seq, idx_phase, idx_ct = 0, 1, 2
+
+    # the last phase won't need tho infer the child seq, so the range is max_random_link, no need to add 1
+    
+    # reorder, key = seq, v = [phase, ct]
+    
+    adapter_ct_by_seq = {}
+    for phase in sorted(adapter_ct):
+        for seq, ct in adapter_ct[phase].items():
+            if seq not in adapter_ct_by_seq:
+                adapter_ct_by_seq[seq] = [phase, ct]
+            elif ct > adapter_ct_by_seq[seq][1] * 1.5:
+                adapter_ct_by_seq[seq] = [phase, ct]
+    
+
+    
+    for phase in range(max_random_linker):
+        try:
+            top5_seq = sorted(adapter_ct[phase].items(), key=lambda _: _[1], reverse=True)[:5]
+        except:
+            # this phase have no adapter found
+            continue
+        for seq, ct in top5_seq:
+            for shift in range(1, 5):
+                child_seq = seq[shift:]
+                if child_seq not in lineage:
+                    lineage[child_seq] = [seq, phase, ct]
+                # if the seq from shifted are the same as the non-shifted
+                elif seq == lineage[child_seq][idx_seq]:
+                    if ct > lineage[child_seq][idx_ct]:
+                        lineage[child_seq] = [seq, phase, ct]
+                elif phase == lineage[child_seq][idx_phase]:  # same phase, choose the largest count
+                    if ct > lineage[child_seq][idx_ct]:
+                        lineage[child_seq] = [seq, phase, ct]
+                elif ct > lineage[child_seq][idx_ct] * 2:
+                    lineage[child_seq] = [seq, phase, ct]
+
+    # logger.info(lineage)
+
+    thres_increase_ratio = 1.05  # when the count of current setting exceed 2 times of the lineage stored count, will accept that, there maybe a real shift
+    res = []
+    keep_status = {}
+
+
+    empty_adapter_ct = [None, 0] # ele1 = phase, ele2 = count
+    for phase in range(max_random_linker + 1):
+        # select the top 5 sequence
+        try:
+            top5_seq = sorted(adapter_ct[phase].items(), key=lambda _: _[1], reverse=True)[:5]
+        except:
+            continue
+        for seq, ct in top5_seq:
+            skip = 0
+
+            for seq_tmp, v_tmp in adapter_ct_by_seq.items():
+                if seq_tmp == seq and phase == v_tmp[0]:
+                    # itself
+                    continue
+                
+                if seq_tmp == seq and phase > v_tmp[0]:
+                    # same sequence, but other has smaller phase
+                    skip = 1
+                    break
+                
+                if seq in seq_tmp and phase >= v_tmp[0]:
+                    # is a subsequence of the upper level sequence
+                    skip = 1
+                    break
+            if skip:
+                continue
+            
+            
+            if phase == 0:
+                res.append([seq, phase, ct])
+                continue
+
+            # there are 3 cases
+            # 1 = parent found,  parent kept - compare the current count with parent count, if larger than parent_ct * thres_increase_ratio, then keep current, drop parent
+            # 2 = parent found, parent = drop -  drop
+            # 3 = parent not found - keep
+            current_lb = f'{seq}_{phase}'
+
+            # for the empty adapter,
+            if seq == '':
+                if ct > empty_adapter_ct[1] * thres_increase_ratio:
+                    empty_adapter_ct[1] = ct
+                    empty_adapter_ct[0] = phase
+                continue
+            for shift in range(1, 7):
+                seq_truncated = seq[:-shift]
+                if seq_truncated in lineage:
+                    parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
+                    parent_lb = f'{parent_seq}_{parent_phase}'
+                    if ct < parent_ct * (max(1.3, 1 + 0.1 * parent_phase)):
+                        skip = 1
+                        break
+            if skip:
+                continue
+            res.append([seq, phase, ct])
+
+
+    # logger.info(keep_status)
+    if empty_adapter_ct[0] is not None:
+        res.append([''] + empty_adapter_ct)
+
+    try:
+        res = sorted(res, key=lambda _: _[1], reverse=True)
+        max_ct = res[0][idx_ct]
+    except:
+        return res
+
+    # each phase, only retain 1
+    res_final = []
+    dedup = {}  # key = phase, v = current largest count
+    for i in res:
+        phase = i[idx_phase]
+        ct = i[idx_ct]
+        if ct < max_ct / 2:
+            continue
+        if phase not in dedup:
+            dedup[phase] = i
+        elif ct > dedup[phase][idx_ct]:
+            dedup[phase] = i
+
+    res_final = sorted(dedup.values(), key=lambda _: _[2], reverse=True)
+
+    # logger.info(res_final)
+    return res_final
+
+
+def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12):
+    """
+    the reason for include the insert as parameter is that
+    sometimes, the three end we got is truncated due to the last several bp of the adapter match with the end of the searched insert sequence.
+
+    e.g. expected insert seq =  ATGCATGCACCT
+    if the adapter starts with T, and the insert missed the last T, then, we will have a complete insert but adapter sequence is not complete (the insert match is too greedy)
+    similarly, if the insert missed CT, and the adapter starts with CT, we will see the same thing
+
+    max_random_linker: there can be at most 6bp between the insert and adapter
+    max_borrowed_base: max alow borrow 2 bp from the insert or random_linker to match the adapter, this is for make up the possibility of wrongly extended sequencing during the extension of the 3' end of the insert due to randomness. e.g. if the downstream of 3' end of mature sequence is A (in reference primary miRNA sequence), and in the read sequence, there will be 1/4 possibility that the next base is also A, so in the extension step, the real downstream sequence will lose 1 base, which will affect the accurate sequence of the adapter sequence / random sequence length. by adding back 0, 1, or 2 base, this possibility can be greatly reduced
+    """
+
+    max_random_linker_range = max_random_linker + 1
+    ct = {phase: {} for phase in range(max_random_linker_range)}
+    thres_replace_upper_phase = 1.4
+
+    # step1 , find  possible adapter from first 200 seq
+
+    # get the count for each phase, each sequence
+    # inital seed, collect all possible sequence in the inital run
+
+    inital_n_reads = 1000 # collect all possible seqence in the first n reads
+
+    # i_insert = 'ATCGGGG'
+
+    truncated_adapter_map = {}
+    available_seq = set()
+
+    def get_ct(data, initial=False):
+        # for _, seq, i_insert in data:  # for split method
+
+        # ct_fraction = 1/(max_borrowed_base + 1)
+        # ct_fraction = 1/(max_borrowed_base)
+        ct_fraction = 1
+
+        # because each read, we will calc no borrow, borrow 1 base, borrow 2base , so the sum of counts of all forms will be much larger than the actual reads count
+        for _, i_insert, seq in data:  # for string subset method
+        # for idata in data:
+            # try:
+            #     _, seq = idata
+            # except:
+            #     logger.error('invalid data found')
+            #     logger.error(idata)
+            #     sys.exit(1)
+
+            # if the 3' region is already too short, skip shifting
+            len_adapt = len(seq)
+            if len_adapt < max_random_linker_range:
+                ct[len_adapt].setdefault('', 0)
+                ct[len_adapt][''] += 1
+                continue
+
+            for phase in range(max_random_linker_range):
+                ires = ct[phase]
+                if phase < max_borrowed_base:
+                    candidate_borrow_seq = i_insert[phase - max_borrowed_base:] + seq[:phase]
+                else:
+                    candidate_borrow_seq = seq[phase - max_borrowed_base:phase]
+                
+                borrow_list = range(max_borrowed_base + 1)
+                
+                # avoid duplicate count during the borrow loop
+                counted = {}  # key = seq
+                
+                
+                for n_borrow in borrow_list:
+                    # ct_add,  if the n_borrow == 0, which is the original sequence, will add a complete 1
+                    # otherwise, will only add a proportion
+                    if n_borrow > 0:
+                        adapt_seq = candidate_borrow_seq[-n_borrow:] + seq[phase: phase + expected_adapter_len - n_borrow]
+                        ct_add = ct_fraction
+                    else:
+                        adapt_seq = seq[phase: phase + expected_adapter_len]
+                        ct_add = 1
+
+                    len_adapt = len(adapt_seq)
+                    # polyN seq
+                    if adapt_seq[:10] == adapt_seq[0] * 10:
+                        adapt_seq = adapt_seq[:10]
+                        available_seq.add(adapt_seq)
+                    elif len_adapt < expected_adapter_len:
+                        # the adapter found maybe truncated
+                        if adapt_seq in truncated_adapter_map:
+                            adapt_seq = truncated_adapter_map[adapt_seq]
+                        else:
+                            candidate_parent = sorted([_ for _ in available_seq if _.startswith(adapt_seq)], key=lambda _: (len(_), _))
+                            if len(candidate_parent) > 0:
+                                adapt_seq_new = candidate_parent[-1]
+                                truncated_adapter_map[adapt_seq] = adapt_seq_new
+                            else:
+                                available_seq.add(adapt_seq)
+                    elif adapt_seq not in available_seq:
+                        available_seq.add(adapt_seq)
+                    if initial:
+                        ires.setdefault(adapt_seq, 0)
+                        if counted.get(adapt_seq):
+                            continue
+                        counted[adapt_seq] = True
+                        ires[adapt_seq] += ct_add
+                    else:
+                        # if not the inital run, will ignore the new adapter seq
+                        try:
+                            ires[adapt_seq] += ct_add
+                            if counted.get(adapt_seq):
+                                continue
+                            counted[adapt_seq] = True
+                        except:
+                            pass
+
+
+    get_ct(parsed_reads[:inital_n_reads], initial=True)
+    if len(parsed_reads) > inital_n_reads:
+        get_ct(parsed_reads[inital_n_reads:], initial=False)
+
+    # logger.info(ct)
+
+    # remove the low count seq and  and shift + borrowed, with exact number as upper unshifted
+    # remove the same seq in the higher phase
+    dedup = {}
+    max_ct = 0
+
+    for phase in sorted(ct):
+        for seq in list(ct[phase]):
+            seq_ct = ct[phase][seq]
+            if seq_ct > max_ct:
+                max_ct = seq_ct
+            if seq_ct < max_ct * 0.2:
+                del ct[phase][seq]
+                continue
+            if seq not in dedup:
+                dedup[seq] = seq_ct
+            elif seq_ct < dedup[seq] * 1.3:
+                del ct[phase][seq]
+            else:
+                dedup[seq] = seq_ct
+    
+    # remove the lower than 50% max ct seq
+    for phase in sorted(ct):
+        for seq in list(ct[phase]):
+            seq_ct = ct[phase][seq]
+            seq_tmp = set(seq)
+            if len(seq_tmp) == 1:
+                # SMARTer / CATS kit
+                seq_new = seq[0] * 12
+                # if phase != 0:
+                #     try:
+                #         prev_ct = ct[0][seq_new]
+                #     except:
+                #         prev_ct = 0
+                #     if seq_ct > prev_ct:
+                #         ct[0][seq_new] = seq_ct
+                #     del ct[phase][seq]
+                
+                
+                if seq != seq_new:
+                    ct[phase][seq_new] = seq_ct
+                    try:
+                        del ct[phase][seq]
+                    except:
+                        pass
+                continue
+
+            ct[phase][seq] = round(seq_ct, 2)
+            if seq_ct < max_ct * 0.5:
+                del ct[phase][seq]
+
+    # logger.info(ct)
+    # logger.info(max_ct)
+
+    ct = {k: v for k, v in ct.items() if len(v) > 0}
+    # logger.info(ct)
+    
+    if len(ct) == 0:
+        return [['NA', 'NA', 0]]
+
+    # ct is like below,  if the max adapter count for phase = 0 (no shift after insert) is very similar to the phased one,
+    # then, we'll use the phase=0 version,  because the other "shift" version is just because the 18bp haven't reached the end of the adapter
+    # and the phase = 0 is the easiest way to specify the cutadapt argument
+
+    # {0:
+    #     {'AGATCGGAAGAGCACACG': 26644,
+    #     'AAGATCGGAAGAGCACAC': 1150,
+    #     'GAAGATCGGAAGAGCACA': 94,
+    #     'GATCGGAAGAGCACACGT': 3973,
+    #     'GAGATCGGAAGAGCACAC': 4644,
+    #     'TAGATCGGAAGAGCACAC': 18394
+    #     },
+    #  1:
+    #     {'GATCGGAAGAGCACACGT': 26646,
+    #     'AGATCGGAAGAGCACACG': 24822,
+    #     'AAGATCGGAAGAGCACAC': 148,
+    #     'ATCGGAAGAGCACACGTC': 3964,
+    #     'TAGATCGGAAGAGCACAC': 415,
+    #     'TCGGAAGAGCACACGTCT': 1644,
+    #     'GAGATCGGAAGAGCACAC': 37,
+    #     },
+    #  ....
+    #     }
+
+    picked_adapter =  pick_3p_adapter(ct)
+    if len(picked_adapter) == 0:
+        # [seq, phase, ct]
+        picked_adapter = [['NA', 'NA', 0]]
+
+    return picked_adapter
+
+
+def infer_5_end_adapter(parsed_reads):
+    """
+    the bigest difference is that, the 5' end, usually, the seq is empty or 0-8 bp
+    here is the preliminary version, only can infer how many fixed bp need to be removed arbituaryly
+    return the count of each 5' length, and the err msg
+    """
+
+    ct = {}  # key = 5' end length
+
+    total_reads = len(parsed_reads)
+    max_random_linker = 11 
+    too_long_lb = f'>{max_random_linker - 1}'
+    for i in parsed_reads:
+        len1 = len(i[0])
+        if len1 < max_random_linker:
+            ct.setdefault(len1, 0)
+            ct[len1] += 1
+        else:
+            ct.setdefault(too_long_lb, 0)
+            ct[too_long_lb] += 1
+    too_long = ct.get(too_long_lb) or 0
+    too_long_ratio = too_long / total_reads
+    # if too_long_ratio > 0.6:
+    #     return [['NA', 0]], f'5\'end too long, total_reads = {total_reads}, len(5 end) > {max_random_linker} bp = {too_long}, ratio = {too_long_ratio:.3f}'
+    try:
+        ct = sorted(ct.items(), key=lambda _: _[1], reverse=True)
+        max_ct = ct[0][1]
+    except:
+        return [['NA', 0]], 'cannot get the 5 end seq count'
+
+    ct = [_ for _ in ct if _[1] > max_ct * 0.1]
+    return ct, None
+
+
+bench = {}
+
+def record(lb, s):
+    e = time.time()
+    try:
+        bench[lb] += e - s
+    except:
+        bench[lb] = e - s
+    return e
+
+
+def parse_fq_reads(fh, parse_read_func, aho_model, primary_padding_dict, blocked_seq, nreads=10_000, enough_parsed_reads=1000, threads=1, sn=None):
+    """
+    inital search = 10w
+    reads_start_pos: for recursive run, if the initial nreads didn't found enough matched reads, will extend the searching, until
+    fh, the previous unfinished file handle
+    extension
+    if sn is not None, will process any seq found
+    otherwise, will calculate n % threads, only process the reads when the sn match
+    """
+
+    parsed_reads = []
+    n = 0
+    n_processed = 0
+    end_reached = 0
+
+    while True:
+        s = time.time()
+        n += 1
+        header = fh.readline()
+        try:
+            # because of random start of the file chunk, the fh may be in the middle of a read
+            if header[0] != '@':
+                logger.warning(f'bad fq format: {header}')
+                continue
+            seqraw = fh.readline()[:-1] # seq
+        except:
+            # if header is not None:
+            #     logger.error(red(f'read fastq exit: n = {n} header = {header}'))
+            end_reached = n
+            break
+        fh.readline()
+        fh.readline()
+
+        # s = record('read', s)
+        if sn is None or n % threads == sn:
+            tmp = parse_read_func(seqraw, aho_model, primary_padding_dict, blocked_seq)
+            n_processed += 1
+            if tmp is not None:
+                parsed_reads.append(tmp)
+                if len(parsed_reads) > enough_parsed_reads:
+                    break
+        # s = record('parse', s)
+
+        # read range control
+        if n_processed > nreads:
+            break
+
+    # logger.info(f'processed = {n_processed/1000}, read = {n/1000}')
+    return parsed_reads, end_reached, fh
+
+def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=400_000, n_processed_for_too_few=500_000, enough_parsed_reads=100, threads=10, sn=0, fh=None):
+    reads_per_round = 10_000 # 10k
+
+    fq_lb = os.path.basename(fn_fq)
+    fq_lb1 = fq_lb.replace('.fastq.gz', '').replace('.fastq', '').replace('.gz', '')
+
+    if threads == 1:
+        sn = None
+
+    parse_read_func = shared_vars['parse_read_func']
+    aho_model = shared_vars['aho_model']
+    primary_padding_dict = shared_vars['primary_padding_dict']
+    blocked_seq = shared_vars['blocked_seq']
+
+    sn_str = '1' if sn is None else sn
+    rounds = int(total_max_reads_to_process/reads_per_round)
+    # logger.info(rounds)
+    # sys.exit(0)
+    if rounds == 0:
+        rounds = 1
+    reads_per_round_str = f'{reads_per_round/1000:.0f}k'
+
+    fh = fh or get_file_handle(fn_fq)
+
+    try:
+        chunk_start = int(chunk_start)
+    except:
+        pass
+    try:
+        chunk_end = int(chunk_end)
+    except:
+        pass
+
+    parsed_reads = []
+    try:
+        # logger.info(f'now jump to {chunk_start}')
+        s = time.time()
+        fh.seek(int(chunk_start))
+        dur = time.time() - s
+        logger.debug(green(f'seek position time = {dur:.2f}'))
+    except:
+        if chunk_start is not None:
+            logger.warning(red(f'file handle not seekable'))
+    # logger.info(green(f'chunk start pos = {fh.tell()}'))
+    # logger.info(f'total_max_reads_to_process = {total_max_reads_to_process/1000000} million, rounds = {rounds}')
+
+    for i in range(rounds):  # each round, 100k,  totally 20 million
+        logger.debug(f'\t\treading {reads_per_round_str} * {i+1} reads')
+        iparsed, end_reached, fh = parse_fq_reads(fh, parse_read_func, aho_model,primary_padding_dict, blocked_seq, nreads=reads_per_round, enough_parsed_reads=enough_parsed_reads, threads=threads, sn=sn)
+        parsed_reads += iparsed
+        n_parsed = len(parsed_reads)
+
+        # if 1 matched reads can be found in every 5000 reads, then,
+        # to collect 1000 matched reads, we need to read 5 million reads
+        n_processed = (i + 1) * reads_per_round
+        matched_ratio = n_processed / (n_parsed + 0.1) # avoid n_parse = 0
+
+        logger.debug(f'\t\tthread: {sn_str} - file position = {fh.tell()/1024/1024:.2f}M, processed = {n_processed}, newly parsed = {len(iparsed)}, total matched reads = {n_parsed}, ratio = {matched_ratio:.0f}')
+
+        if n_processed > (n_processed_for_too_few - 10) and matched_ratio > 5000:
+            logger.debug(red(f'\t\tstopped due to processed_vs_matched_ratio too high: {matched_ratio:.0f}, processed = {n_processed}, thres = {n_processed_for_too_few}'))
+            break
+
+        if end_reached:
+            logger.info(red(f'\t\t{fq_lb1}: whole fq read through, total_reads = {(end_reached + reads_per_round * i) / 1000000:.2f} M, matched = {n_parsed}'))
+            break
+        if n_parsed > enough_parsed_reads:
+            logger.debug(f'enough reads got')
+            break
+    else:
+        logger.debug(f'total_max_reads_to_process reached: {total_max_reads_to_process}')
+
+    # logger.info(f'chunk run summary = {vars}')
+    if sn is not None:
+        fh = None
+    try:
+        end_pos = fh.tell()
+    except:
+        end_pos = 0
+        
+    return parsed_reads, n_processed, fh, end_pos
+
+
+def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_reads_prev=None):
+    # total_max_reads_to_process = enough_parsed_reads * 100
+    
+    total_max_reads_to_process = max(enough_parsed_reads, 1000) * 1000 # at least find 1 matched read out of 300 processed reads
+    n_processed_for_too_few = 4_000_000
+    
+    enough_parsed_reads_orig = enough_parsed_reads
+    
+    if parsed_reads_prev:
+        enough_parsed_reads = enough_parsed_reads - len(parsed_reads_prev)
+        logger.info(green(f'current enough reads = {enough_parsed_reads}'))
+
+    # check if the input data is a file
+    try:
+        with open(fn_fq) as f:
+            f.seek(10)
+    except:
+        logger.info(f'input data is not file, multithread not supported, switch back to single core mode')
+        threads = 1
+
+    # initally, we split the file evenly, e.g. chunk10 will read from file_size * 0.9
+    # however, the file.seek will take so long...
+    # now, we'll send the sn to the chunk, only process the reads if the mod match with sn
+
+    # if the fq file is already rich in miRNA, we should avoid using multithreads
+    # because spawning the subprocess itself will take a while
+
+    tmp = fh.tell() if fh else 0
+    logger.debug(green(f'start position of fh = {tmp/1024/1024:.2}M fh = {fh}, total_max_reads_to_process={total_max_reads_to_process}', ))
+    blocked_seq = glob_var['blocked_seq']
+    
+    shared_vars = {
+        'aho_model': aho_model,
+        'parse_read_func': parse_read_func,
+        'primary_padding_dict': primary_padding_dict,
+        'blocked_seq': blocked_seq,
+    }
+    
+    parsed_reads, n_processed, fh, end_pos = process_chunk(fn_fq, shared_vars, None, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=enough_parsed_reads * 400, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)
+    
+
+    logger.debug(green(f'new parsed reads = {len(parsed_reads)}'))
+    if parsed_reads_prev:
+        parsed_reads += parsed_reads_prev
+        logger.debug(green(f'extended parsed reads = {len(parsed_reads)}'))
+
+    if len(parsed_reads) > enough_parsed_reads_orig:
+        logger.info(green(f'the fastq is rich in expected sequence!'))
+        return parsed_reads, n_processed, fh
+
+    # get half 
+    enough_parsed_reads_orig = max(enough_parsed_reads_orig//3, 300)
+    enough_parsed_reads = enough_parsed_reads_orig
+    
+    
+    if threads == 1:
+        logger.info('single core mode')
+        parsed_reads_new, n_processed_new = process_chunk(fn_fq, shared_vars, end_pos, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=n_processed_for_too_few, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)[:2]
+        parsed_reads += parsed_reads_new
+        n_processed += n_processed_new
+        return parsed_reads, n_processed, fh
+
+    if end_pos:
+        enough_parsed_reads = enough_parsed_reads_orig - len(parsed_reads)
+    else:
+        parsed_reads = []
+
+    n_processed_for_too_few -= n_processed
+
+    logger.debug(f'\t\ttest run end_pos = {end_pos/1024/1024:.2f},  current remaining matched reads to collect = {enough_parsed_reads}')
+
+    n_tasks = min(threads, mp.cpu_count())
+    chunk_args = []
+    logger.info(green(f'\t\tprocessing  file using {n_tasks} cores'))
+
+    for i in range(n_tasks):
+        chunk_args.append((fn_fq, shared_vars, end_pos, total_max_reads_to_process, n_processed_for_too_few//n_tasks, enough_parsed_reads//n_tasks, threads, i, None))
+
+    with mp.Pool(n_tasks) as p:
+        chunk_results = p.starmap(process_chunk, chunk_args)
+
+    sn_thread = 0
+    for i, i_n_processed, _fh, _endpos in chunk_results:
+        parsed_reads.extend(i)
+        n_processed += i_n_processed
+    return parsed_reads, n_processed, fh
+
+def get_file_handle(fn_fq):
+    if fn_fq.endswith('.gz'):
+        # try:
+        #     from xopen import xopen
+        #     f = xopen(fn_fq, 'rt') # 0.2s
+        #     # print('xopen is used')
+        # except:
+        #     raise
+        f = gzip.open(fn_fq, 'rt')  # 0.26s
+
+        # if threads == 1 and platform.lower() in {'darwin', 'linux'}:
+        #     # logger.info(f'platform = {platform}')
+        #     f = os.popen(f'gunzip -c -d {fn_fq}')._stream  # 0.12s
+        # else:
+        #     import gzip
+        #     f = gzip.open(fn_fq, 'rt')
+
+        # f = os.popen(f'pigz -c -d {fn_fq}')._stream  # 0.11s
+        # f =Popen(f'pigz -c -d {fn_fq}', shell=True, stdout=PIPE, universal_newlines=True).stdout
+    else:
+        f = open(fn_fq, buffering=1)
+    return f
+
+def get_fq_lb(fn_fq):
+    fq_lb = os.path.basename(fn_fq)
+    fq_lb1 = fq_lb.replace('.fastq.gz', '').replace('.fastq', '').replace('.gz', '')
+
+    return fq_lb1
+
+def check_dominant(fn_fq, parsed_reads, adapter3_seq):
+    """
+    1. check if certain miRNA seq is dominant  in the parsed reads result
+    2. calc the ratio of the found 3' adapter in the first 1000 reads of the file
+    """
+    
+    dominant_ratio_thres = 0.6
+    adapter3_seq = adapter3_seq.upper()
+    if adapter3_seq == 'NA':
+        return None, None
+    
+    seq_all = {}
+    total_n = len(parsed_reads)
+    for i in parsed_reads:
+        iseq = i[1]
+        seq_all.setdefault(iseq, 0)
+        seq_all[iseq] += 1
+    
+    seq_all = sorted(seq_all.items(), key=lambda _: _[1], reverse=True)
+    seq_top10 = [[k, round(v/total_n, 4)] for k, v in seq_all[:10]]
+    
+    logger.debug(f'top 10 found miRNA is {seq_top10}')
+    
+    if seq_top10[0][1] > dominant_ratio_thres:
+        is_dominant = 1
+        dominant_seq = seq_top10[0][0]
+    else:
+        is_dominant = 0
+        dominant_seq = None
+    
+    
+    fh = get_file_handle(fn_fq)
+    
+    n = 0
+    n_reads_check = 1000 # check the 3' adapter in first 1000 reads
+    
+    n_found = 0
+    while True:
+        n += 1
+        header = fh.readline()
+        try:
+            # because of random start of the file chunk, the fh may be in the middle of a read
+            if header[0] != '@':
+                logger.warning(f'bad fq format: {header}')
+                continue
+            seqraw = fh.readline()[:-1].upper() # seq
+        except:
+            end_reached = n
+            break
+        fh.readline()
+        fh.readline()
+        
+        if adapter3_seq in seqraw:
+            n_found += 1
+        
+        if n > n_reads_check:
+            break
+    
+    adapter_ratio = round(n_found/ n, 4)
+
+    
+    if adapter_ratio < 0.8:
+        logger.debug(red(f'sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
+    else:
+        logger.debug(green(f'sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
+        is_dominant = 0
+    
+    return is_dominant, dominant_seq
+
+
+def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=50, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+
+    initial_seed_len = 15    # for universal adapter found
+
+    if parsed_reads_prev:
+        logger.debug(f'parsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
+    # process the reads
+    # logger.info(f'enough reads = {enough_parsed_reads}')
+    # fq_lb = os.path.basename(fn_fq)
+    # fq_lb1 = fq_lb.replace('.fastq.gz', '').replace('.fastq', '').replace('.gz', '')
+
+    fq_lb1 = get_fq_lb(fn_fq)
+    do_parse_reads = True
+
+    if debugmode:
+        fn_parsed_redas = f'{pw_data}/{fq_lb1}.parsed_reads.pkl'
+
+        if not force_parse_reads:
+            try:
+                with open(fn_parsed_redas, 'rb') as f:
+                    parsed_reads = pickle.load(f)
+                logger.info(f'\t\tusing prev saved parsed_reads, n = {len(parsed_reads)}')
+                do_parse_reads = False
+            except:
+                pass
+
+    if fh is not None and recursive_round==0:
+        threads = 1
+
+
+    n_processed = -1
+    if do_parse_reads:
+        logger.info(f'{enough_parsed_reads=}, {recursive_round=}')
+        parsed_reads, n_processed, fh = get_parsed_reads(fn_fq, fh, enough_parsed_reads=enough_parsed_reads, threads=threads, parsed_reads_prev=parsed_reads_prev)
+
+    n_parsed_reads = len(parsed_reads)
+    
+    if debugmode:
+        with open(fn_parsed_redas, 'wb') as o:
+            pickle.dump(parsed_reads, o)
+
+    if debugmode:
+        if args.debug:
+            fntmp = f'{fq_lb1}.parsed_reads.txt'
+            logger.info(red(f'parsed reads = {fntmp}'))
+            with open(fntmp, 'w') as o:
+                print('\n'.join(map(str, parsed_reads)), file=o)
+
+    n_parsed_reads = len(parsed_reads)
+
+    if n_parsed_reads < min_parsed_reads:
+        logger.info(red(f'\t\ttoo few matched reads (n={n_parsed_reads}) found in this fastq file, please check if you used the correct organism or reference'))
+        return None
+    
+    if benchmode:
+        logger.warning(f'smallrna ratio:{n_parsed_reads/n_processed:.5f}')
+    logger.debug(green(f'total matched reads for inferring = {n_parsed_reads}, n_processed = {n_processed}, matched reads density = {n_processed/n_parsed_reads:.1f}'))
+
+
+    # [seq, phase, ct]
+    adapter3 = infer_3_end_adapter(parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len)
+
+    # adapter 5 = [phase, count]
+    # adapter3 = [seq, phase, count]
+    adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads)
+
+
+    # check for dominant miRNA
+    is_dominant, dominant_seq = check_dominant(fn_fq, parsed_reads, adapter3[0][0])
+
+    if is_dominant:
+        if recursive_round > 3:
+            logger.error(red(f'recusive run round = {recursive_round}, something is wrong, quit now'))
+            sys.exit(1)
+        logger.debug(red(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}'))
+        if glob_var['blocked_seq'] is None:
+            glob_var['blocked_seq'] = {dominant_seq, }
+        else:
+            glob_var['blocked_seq'].add(dominant_seq)
+        
+        parsed_reads_new = [_ for _ in parsed_reads if _[1] != dominant_seq]
+
+        return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1)
+
+    return fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+
+def get_adapter_per_prj(prj, fq_list, pw_data, force=False, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=50, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=2, expected_adapter_len=12, threads=10, fh=None):
+
+    # ires is used for recursive run, in case adapter found per fq but no consensus found for gse
+    thres_adapter_ratio = 0.1 # the min ratio of reads found this adapter
+    thres_adapter_ratio_per_fq = 0.1 # the min ratio of reads found this adapter
+    initial_call = True if ires is None else False
+
+    if prj == 'single':
+        prj = os.path.basename(fq_list[0]).replace('.gz', '').replace('.fastq', '')
+    # fn_gse_pkl = f'{pw_data}/{prj}.summary.pkl'
+    ires = ires or {'total_count': 0, 'fail': False, 'non_universal': False, 3: {}, 5: {}, 'err': [], 'fq_adapter': [], 'picked': []}
+    # fail, if set to 1, means that the previous search adapter for this gse failed
+    # non_universal, if True (a list, which means that , each sample has it's own adapter)
+    # fq_adapter , list, each elemnet is fq_lb, total_count, adapter3, adapter5, err_msg_5_end
+    # picked, 2 element 3' and 5' adapter, each has 3 element, [seq, phase, ratio]
+
+    # fn_gse_pkl_base = os.path.basename(fn_gse_pkl)
+    # try:
+    #     if not force and not fn_gse_pkl_base.startswith('single'):
+    #         with open(fn_gse_pkl, 'rb') as f:
+    #             ires_prev = pickle.load(f)
+    #     else:
+    #         ires_prev = None
+    # except:
+    #     ires_prev = None
+
+    # if not force and ires_prev is not None:
+    #     logger.info(green(f'\tadapter already got'))
+    #     logger.debug(f'the prev data pickle = {fn_gse_pkl}')
+    #     if ires_prev['fail']:
+    #         logger.warning(red(f'\tprevious adapter not found'))
+    #     return ires_prev
+
+    if fh is not None:
+        fq_list = ['stdin']
+
+    non_universal = False
+    n = 0
+
+    ct_for_empty_3p_seq = 0
+    for fq in fq_list:
+        n += 1
+        if nsam > 0 and n > nsam:
+            break
+        logger.info(green(f'\tprocessing {fq}'))
+        tmp = main(pw_data, fq, force_parse_reads=force_parse_reads,
+        min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh,
+        threads=threads,
+        max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len,
+        )
+
+        try:
+            fq_lb, total_count, adapter3, adapter5, err_msg_5_end = tmp
+        except:
+            logger.error(red(f'\t\tfail to get fq adapter: {prj} - {fq}'))
+            continue
+        try:
+            ires['total_count'] += total_count
+        except:
+            logger.error(red(f'invalid total_count: {total_count}'))
+
+        seq, phase, ct = adapter3[0]
+        if seq == '':
+            ct_for_empty_3p_seq += ct
+
+        ires[3].setdefault(phase, {}).setdefault(seq, 0)
+        ires[3][phase][seq] += ct
+
+        phase5, ct5 = adapter5[0]
+        ires[5].setdefault(phase5, 0)
+        try:
+            ires[5][phase5] += ct5
+        except:
+            # modify here
+            logger.error(adapter5)
+            logger.error(err_msg_5_end)
+            sys.exit(1)
+
+        if err_msg_5_end:
+            ires['err'].append(adapter5)
+        ires['fq_adapter'].append(tmp)
+
+    # ires = {'total_count': 0, 'fail': False, 'non_universal': False, 3: {}, 5: {}, 'err': [], 'fq_adapter': [], 'picked': []}
+
+    if len(ires[3]) == 0:
+        ires['fail'] = True
+        return ires
+
+    total_count = ires['total_count']
+    picked_3 = [None, None, 0] # seq, phase, count
+    picked_5 = [None, 0] # phase, count
+
+    logger.info(ires)
+    empty_str = [None, None, 0]
+    for phase3, v1 in ires[3].items():
+        for seq, ct in v1.items():
+            if seq == '':
+                if empty_str is None or ct > empty_str[-1] * thres_multiplier:
+                    empty_str = [seq, phase, ct]
+                continue
+            if ct > picked_3[-1] * 1.2:
+                picked_3 = [seq, phase, ct]
+    if picked_3[0] is None or picked_3[2] * 1.5 < empty_str[2]:
+        picked_3 = empty_str
+
+    for phase5, ct in ires[5].items():
+        if ct > picked_5[-1] * 1.2:
+            picked_5 = [phase5, ct]
+
+    if picked_3[0] != '':
+        ratio3 = min(round(picked_3[-1] / (total_count - ct_for_empty_3p_seq + 1), 4), 1)
+        # logger.info(f'empty ct = {ct_for_empty_3p_seq}, total count = {total_count}, candidate adapter count = {picked_3[-1]}, base = {total_count - ct_for_empty_3p_seq}')
+
+    else:
+        ratio3 = round(picked_3[-1]/total_count, 4)
+    ratio5 = round(picked_5[-1] / total_count, 4)
+    picked_3.append(ratio3)
+    picked_5.append(ratio5)
+
+    # logger.info(picked_3)
+    # logger.info(ct_for_empty_3p_seq)
+    # sys.exit(1)
+
+    if ratio3 < thres_adapter_ratio or ratio5 < thres_adapter_ratio:
+        ires['fail'] = True
+    else:
+        ires['fail'] = False
+    ires['picked'] = [picked_3, picked_5]
+
+    # logger.info(ires)
+    # check if the adapter is per fq
+    # ires is None ensure that, the recursive only happen once
+    if ires['fail'] and initial_call:
+        n_ok_fq = 0
+        for fq_lb, total_count, adapter3, adapter5, err_msg_5_end in ires['fq_adapter']:
+            seq, phase, ct = adapter3[0]
+            ratio3 = ct / total_count
+            if ratio3 > thres_adapter_ratio_per_fq:
+                n_ok_fq += 1
+
+        if n_ok_fq > len(ires['fq_adapter']) * 0.6 and len(fq_list) > nsam:
+            ires['non_universal'] = True
+            logger.warning(red(f'\t\t{prj}: each fq file in this dataset may have differnt adapters'))
+            logger.info(red(f'\t\tnow getting adapter for all samples'))
+            ires = get_adapter_per_prj(prj, fq_list[nsam:], pw_data, force=True, force_parse_reads=force_parse_reads, nsam=-1, ires=ires, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=None)
+
+
+    # with open(fn_gse_pkl, 'wb') as o:
+    #     pickle.dump(ires, o)
+
+    return ires
+
+
+def export_data(data, prj, printonly=False):
+        # ires = ires or {'total_count': 0, 'fail': False, 'non_universal': False, 3: {}, 5: {}, 'err': [], 'fq_adapter': [], 'picked': []}
+        #     # fail, if set to 1, means that the previous search adapter for this gse failed
+        #     # non_universal, if True (a list, which means that , each sample has it's own adapter)
+        #     # fq_adapter , list, each elemnet is fq_lb, total_count, adapter3, adapter5, err_msg_5_end
+        #     # picked, 2 element 3' and 5' adapter, each has 3 element, [seq, phase, ratio]
+        #
+        #     res = []
+
+    res = []
+    res_fq = []
+    header_per_fq = ['prj', 'fastq', 'total_reads', 'side', 'sn', 'seq', 'phase', 'count', 'ratio']
+    header_per_gse = ['prj', 'total_reads', '3p_seq', '3p_phase', '3p_count', '3p_ratio', '5p_phase', '5p_count', '5p_ratio', 'err']
+    res.append(header_per_gse)
+    res_fq.append(header_per_fq)
+
+    res_fq_d = {}
+    for gse, v in data.items():
+        picked = v['picked']
+        fq_adapter = v['fq_adapter']
+        v_lite = {k1: v1 for k1, v1 in v.items() if k1 != 'fq_adapter'}
+        if v['non_universal']:
+            res.append([gse, 'sample_has_separate_adapters'])
+        elif len(picked) == 0:
+            res.append([gse, 'no_adapter_found'])
+            logger.info(f'{gse}: {v_lite}')
+        else:
+            if len(v['err']) == 0:
+                err_str = ''
+            else:
+                err_str = str(v['err'])
+            res.append([gse, v['total_count']] + picked[0] + picked[1] + [err_str])
+
+        # per fq
+
+        for fq_lb, total_count, adapter3, adapter5, err_msg_5_end in fq_adapter:
+            sn = 0
+            try:
+                res_fq_d[fq_lb] = [adapter3[0][0], adapter3[0][1], adapter5[0][0]]
+            except:
+                pass
+
+
+            for seq, phase, ct in adapter3:
+                sn += 1
+                ratio = round(ct / total_count, 4)
+                if not seq:
+                    seq = 'empty'
+                res_fq.append([gse, fq_lb, total_count, '3p', sn, seq, phase, ct, ratio])
+
+
+            sn = 0
+            for phase, ct in adapter5:
+                sn += 1
+                ratio = round(ct / total_count, 4)
+                res_fq.append([gse, fq_lb, total_count, '5p', sn, '', phase, ct, ratio])
+
+    if printonly:
+        tmp = ['\t'.join(map(str, _)) for _ in res]
+        print('proj result\n\t' + '\n\t'.join(tmp))
+        res_fq = ['\t'.join(map(str, _)) for _ in res_fq]
+        print('per_fq\n\t' + '\n\t'.join(res_fq))
+        sys.exit(0)
+
+    fn_gse = f'{prj}.adapter.txt'
+    fn_fq = f'{prj}.per_fq.adapter.txt'
+
+
+    with open(fn_gse, 'w') as o:
+        tmp = ['\t'.join(map(str, _)) for _ in res]
+        print('\n'.join(tmp), file=o)
+    with open(fn_fq, 'w') as o:
+        res_fq = ['\t'.join(map(str, _)) for _ in res_fq]
+        print('\n'.join(res_fq), file=o)
+
+    logger.info(f'result per-prj = {fn_gse}')
+    logger.info(f'result per-fq = {fn_fq}')
+
+
+    return res, res_fq_d
+
+def build_cutdapt_script(pw_cutadapt, adapter_setting, fn_fq, fq_lb,  gse, pw_script):
+    fn_out = fn_fq.replace('.fastq.gz', '_trimmed.fastq.gz')
+    fn_script = f'{pw_script}/{gse}.{fq_lb}.cutadapt.sh'
+    seq_3p, phase_3p, phase_5p = adapter_setting
+
+    if seq_3p == '' or seq_3p == 'empty':
+        if phase_5p == 0:
+            logger.info(f'adapter already removed for {fn_fq}')
+            return
+        cmd = f'{pw_cutadapt} -u {phase_5p} -m 15 -j 8  --trim-n {fn_fq} -o {fn_out}'
+    elif phase_5p == 0 and phase_3p == 0:
+        cmd = f'{pw_cutadapt} -a {seq_3p} -m 15 -j 8  --trim-n  {fn_fq} -o {fn_out}'
+    else:
+        remove_random_arg = []
+        if phase_3p:
+            remove_random_arg.append(f'-u -{phase_3p}')
+        if phase_5p:
+            remove_random_arg.append(f'-u {phase_5p}')
+        remove_random_arg = ' '.join(remove_random_arg)
+
+        cmd = f'{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq}|cutadapt {remove_random_arg} -m 15 -o {fn_out}'
+
+    with open(fn_script, 'w') as o:
+        print(f'#! /user/bin/env bash\n\n{cmd}', file=o)
+    return fn_script
+
+def run_cutadapt(adapter_gse, adapter_fq, task):
+    # res.append([gse, v['total_count']] + picked[0] + picked[1] + [err_str])
+    # res.append([gse, 'no_adapter_found'])
+    # res.append([gse, 'sample_has_separate_adapters'])
+
+    pw_script = 'cutadapt_script'
+    os.makedirs(pw_script, exist_ok=True)
+
+    # get the cutadapt path
+    pw_cutadapt = args.pw_cutadapt
+    if pw_cutadapt is None:
+        tmp = os.popen(f'which cutadapt 2>/dev/null').read().strip()
+        if tmp and 'cutadapt' in tmp:
+            pw_cutadapt = tmp
+
+    if pw_cutadapt is not None:
+        version_info = os.popen(f'{pw_cutadapt} --version').read().strip()
+        if not version_info:
+            logger.warning(red(f'cutadapt not working properly: {pw_cutadapt}'))
+            pw_cutadapt = None
+        else:
+            logger.info(green(f'cutadapt version = {version_info}'))
+
+    if not pw_cutadapt:
+        pw_cutadapt = 'cutadapt'
+    else:
+        pw_cutadapt = os.path.realpath(pw_cutadapt)
+        logger.debug(f'cutadapt path = {pw_cutadapt}')
+
+    script_list = []
+    for i in adapter_gse[1:]:
+        gse  = i[0]
+        tmp = i[1]
+        if tmp in [f'no_adapter_found for {gse}']:
+            continue
+        # prj	total_reads	3p_seq	3p_phase	3p_count	3p_ratio	5p_phase	5p_count	5p_ratio	err
+        # single	4101	GATGGAATTCTC	2	1637.5	0.3992	0	3586	0.8744
+        fq_list = sorted(task[gse])
+        for fn_fq in fq_list:
+            fq_lb = get_fq_lb(fn_fq)
+            # adapter_fq[fq_lb] = [3p_seq, 3p_phase, 5p_phase]
+            if tmp in ['sample_has_separate_adapters']:
+                try:
+                    adapter_setting = adapter_fq[fq_lb]
+                except:
+                    logger.warning(f'adapter not found for {fn_fq}')
+                    continue
+            else:
+                adapter_setting = [i[2], i[3], i[6]]
+
+            fn_script = build_cutdapt_script(pw_cutadapt, adapter_setting, fn_fq, fq_lb, gse, pw_script)
+            script_list.append(fn_script)
+
+
+    logger.info(f'cutadapt script list  = {len(script_list)}: cutadapt_script_list.txt')
+    with open(f'cutadapt_script_list.txt', 'w') as o:
+        print('\n'.join(script_list), file=o)
+
+def parse_organism(name, list_org=False):
+    # human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa
+    name = re.sub('\W', '', name).lower()
+    if name == 'other':
+        return name
+    
+    # all organisms with miRNA number >=300 in miRBase
+    # total 55 species
+    supported_prefix = {'pma', 'pbv', 'mdm', 'zma', 'dvi', 'tgu', 'stu', 'oha', 'cgr', 'lja', 'ggo', 'ami', 'dre', 'aly', 'prd', 'ptc', 'cpi', 'cli', 'efu', 'ath', 'chi', 'cel', 'aca', 'cfa', 'ssc', 'dme', 'cja', 'hpo', 'ssa', 'gmo', 'bdi', 'cin', 'ppc', 'bmo', 'ocu', 'ptr', 'tca', 'pab', 'dno', 'oan', 'ppy', 'pal', 'cpo', 'eca', 'oni', 'osa', 'mtr', 'gma', 'rno', 'mml', 'bta', 'mdo', 'gga', 'mmu', 'hsa'}
+    
+    name_map1 = {
+        'human': 'hsa', 
+        'mouse': 'mmu',
+        'fruitfly': 'dme',
+        'worm': 'cel',
+        'arabidopsis': 'ath',
+        'rice': 'osa',
+        }
+    
+    if list_org:
+        info = f'Supported organisms are:\nmiRBase organism prefixes:\n\t' + '\n\t'.join(supported_prefix)
+        info += f'common names:\n\t' + '\n\t'.join(sorted(name_map1))
+        return info
+    
+    
+    if name in supported_prefix:
+        return name
+    return name_map1.get(name)
+
+class TrieNode:
+    def __init__(self):
+        self.children = {}
+        self.is_end_of_word = False
+        self.fail = None
+        self.output = []
+
+class AhoCorasick:
+    def __init__(self):
+        self.root = TrieNode()
+    def add_word(self, word):
+        node = self.root
+        for char in word:
+            node = node.children.setdefault(char, TrieNode())
+        node.is_end_of_word = True
+        node.output.append(word)
+    def build(self):
+        queue = deque()
+        for child in self.root.children.values():
+            queue.append(child)
+            child.fail = self.root
+        while queue:
+            current = queue.popleft()
+            for key, child_node in current.children.items():
+                queue.append(child_node)
+                fail_node = current.fail
+                while fail_node and key not in fail_node.children:
+                    fail_node = fail_node.fail
+                child_node.fail = fail_node.children[key] if fail_node else self.root
+                child_node.output += child_node.fail.output
+    def search(self, text):
+        node = self.root
+        for i, char in enumerate(text):
+            while node and char not in node.children:
+                node = node.fail
+            if not node:
+                node = self.root
+                continue
+            node = node.children[char]
+            if node.output:
+                pattern = node.output[0]
+                return ([pattern, text[:i - len(pattern) + 1], text[i + 1:]])
+        # Return None if no match is found
+        return None
+
+def parse_fa(fn):
+    with open(fn) as f:
+        res = set()
+        append = res.add
+        while True:
+            header = f.readline()
+            if not header:
+                break
+            if header[0] != '>':
+                continue
+            sequence = f.readline().strip()
+            append(sequence)
+    
+    return list(res)
+
+def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custom_model=False):
+    primary_padding_dict = {}
+
+    installed = False
+    if not force_custom_model:
+        try:
+            import ahocorasick
+            installed = True
+            aho = ahocorasick.Automaton()
+        except:
+            if not quiet:
+                logger.warning(f'pyahocorasick package not installed, now using self-implemented Aho-Corasick algorithm. Installing of this package by "pip install pyahocorasick" is recommended (but not required), to suppress this warning, use -quite / -q')
+    if not installed:
+        aho = AhoCorasick()
+        
+    mir_seq_l = []
+    if organism != 'other':
+        if organism == 'hsa' and legacy_mode == True:
+            fn_pkl = f'{pw_script}/data/hsa.selected.refseq.pkl'
+        else:
+            fn_pkl = f'{pw_script}/data/{organism}.refseq.pkl'
+        with open(fn_pkl, 'rb') as f:
+            primary_padding_dict = pickle.load(f)
+        mir_seq_l += list(primary_padding_dict)
+
+    if fn_refseq:
+        if fn_refseq.endswith('.fa'):
+            custom_seq, invalid_seq = parse_fa(fn_refseq)
+        else:
+            custom_seq = []
+            invalid_seq = []
+            with open(fn_refseq) as f:
+                for i in f:
+                    i = i.strip()
+                    if not i:
+                        continue
+                    tmp = verify_seq(i, convert=True)
+                    if tmp:
+                        custom_seq.append(tmp)
+                    else:
+                        invalid_seq.append(i)
+        if len(custom_seq) > 5000:
+            logger.warning(f'passed reference sequence number is to much: n={len(custom_seq)}, will only use the first 5000 sequences')
+            custom_seq = custom_seq[:5000]
+        if len(invalid_seq) > 0:
+            logger.warning(f'invlaid seq found in {fn_refseq}: n = {len(invalid_seq)}, first 10 = {invalid_seq[:10]}')
+        mir_seq_l += custom_seq
+
+    n_words = len(mir_seq_l)
+    if n_words == 0:
+        logger.error(f'no refseq added, please specify the correct organism and/or fn_refseq')
+        sys.exit(1)
+    if n_words < 50:
+        logger.warning(f'refseq number too few: {n_word}')
+
+    if installed:
+        for idx, substring in enumerate(mir_seq_l):
+            aho.add_word(substring, substring)
+        aho.make_automaton()
+    else:
+        for s in custom_seq:
+            aho.add_word(s)
+        aho.build()
+    return aho, primary_padding_dict, installed
+
+
+if __name__ == "__main__":
+
+    fn_fq = args.fq
+    gse_map = args.fn_fq_list
+    nreads = args.nreads
+
+    if debugmode:
+        force_parse_reads = args.force
+        force = args.force1 or args.force
+    else:
+        force = False
+        force_parse_reads = False
+
+    # restrict_gse_list = args.keep or set()
+    # restrict_gse_list = set(restrict_gse_list)
+    threads = args.threads
+    cutadapt = args.cut
+    printonly = args.print
+
+    if debugmode:
+        app_config = load_config()
+        pw_data = app_config.get('pw_data') or 'data'
+        os.makedirs(pw_data, exist_ok=True)
+        logger.info(f'{pw_data=}')
+        
+    else:
+        pw_data = None
+
+    # modify here, set fh as None
+    # this just for testing if the stdin fastq content is faster
+    # fh = sys.stdin
+    fh = None
+    task = {}
+
+    # seq for hsa-let-7a-5p = TGAGGTAGTAGGTTGTATAGTT
+
+    prj = args.o # output name
+
+    task_order = []
+    max_check_srr_n = args.nsam or 5 # max check 4 files for each gse
+    if fn_fq:
+        task['single'] = [fn_fq]
+        task_order.append('single')
+        prj = prj  or get_prj_lb(fn_fq)
+    elif gse_map:
+        invalid_fq = []
+        with open(gse_map) as f:
+            for i in f:
+                i = i.strip()
+                if not i:
+                    continue
+                gse, fq = i.split('\t')
+                if not fq.endswith('.fastq.gz') and not fq.endswith('.fastq') and not fq.endswith('.fq.gz'):
+                    invalid_fq.append(i)
+                    continue
+                if gse not in task_order:
+                    task_order.append(gse)
+                task.setdefault(gse, [])
+                task[gse].append(fq)
+        prj = prj or os.path.basename(gse_map).replace('.txt', '')
+    # print({k: len(v) for k, v in task.items()})
+
+        if len(invalid_fq) > 0:
+            logger.warning(f'the following files seems not to be fastq file\nfile = {gse_map}')
+            print('\n\t' + '\n\t'.join(invalid_fq))
+
+    max_random_linker = args.max_random_linker
+    # max_borrowed_base = args.max_borrowed_base
+    max_borrowed_base = 2
+    expected_adapter_len = args.expected_adapter_len
+    min_parsed_reads = args.min_reads
+    enough_parsed_reads = args.enough_reads
+    quiet = args.quiet
+
+    organism = parse_organism(args.organism)
+    if organism is None:
+        logger.error(f'unkown organism: {args.organism}')
+        tmp = parse_organism(args.organism, list_org=True)
+        print(tmp)
+        sys.exit(1)
+    
+    fn_refseq = args.fn_refseq
+    if organism == 'other' and not fn_refseq:
+        logger.error(f'either organism or -fn_refseq must be specified')
+        sys.exit(1)
+
+    if fn_refseq and not os.path.exists(fn_refseq):
+        logger.error(f'ref seq file not exist: {fn_refseq}')
+        sys.exit(1)
+
+    legacy_mode = False  # if true, will use the old parsing function, which will use the top 100 most expressed miRNA in human as the reference, 
+    force_custom_model = False
+    aho_model, primary_padding_dict, pyaho_installed = build_model(organism, fn_refseq, legacy_mode, quiet, force_custom_model)
+    
+    if pyaho_installed:
+        parse_read_func = parse_read_seq_mirna_pyahocorasick
+    else:
+        parse_read_func = parse_read_seq_mirna_custom
+            
+    task_set = task_order
+    res = {}
+    n = 0
+    n_prj = len(task_set)
+
+    if len(task_set) == 0:
+        logger.error(red(f'no valid task found, exit now'))
+        sys.exit(1)
+    for gse in task_set:
+        fq_list = sorted(task[gse])
+        n += 1
+        nsam = min(max_check_srr_n, len(fq_list))
+        logger.info(green(f'{n}/{n_prj}: {gse} - using {nsam}/ {len(fq_list)} fq files'))
+        ires = get_adapter_per_prj(gse, fq_list, pw_data, force=force,force_parse_reads=force_parse_reads, nsam=nsam, ires=None, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, threads=threads, fh=fh)
+
+        res[gse] = ires
+
+    if benchmode:
+        dure = time.time() - starttime
+        logger.warning(f'runtime:{dure:.2f}')
+        sys.exit(0)
+
+    adapter_gse, adapter_fq = export_data(res, prj, printonly)
+
+    if cutadapt:
+        run_cutadapt(adapter_gse, adapter_fq, task)
