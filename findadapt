@@ -1001,6 +1001,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
         parsed_reads, n_processed, fh = get_parsed_reads(fn_fq, fh, enough_parsed_reads=enough_parsed_reads, threads=threads, parsed_reads_prev=parsed_reads_prev)
     
         if debugmode:
+            os.makedirs(pw_data, exist_ok=True)
             with open(fn_parsed_redas, 'wb') as o:
                 pickle.dump(parsed_reads, o)
 
@@ -1579,7 +1580,6 @@ if __name__ == "__main__":
     printonly = args.print
 
     pw_data = 'data'
-    os.makedirs(pw_data, exist_ok=True)
 
     # modify here, set fh as None
     # this just for testing if the stdin fastq content is faster
