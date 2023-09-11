@@ -1383,22 +1383,50 @@ def parse_organism(name, list_org=False):
         return name
     
     # all organisms with miRNA number >=300 in miRBase
-    # total 55 species
-    supported_prefix = {'pma', 'pbv', 'mdm', 'zma', 'dvi', 'tgu', 'stu', 'oha', 'cgr', 'lja', 'ggo', 'ami', 'dre', 'aly', 'prd', 'ptc', 'cpi', 'cli', 'efu', 'ath', 'chi', 'cel', 'aca', 'cfa', 'ssc', 'dme', 'cja', 'hpo', 'ssa', 'gmo', 'bdi', 'cin', 'ppc', 'bmo', 'ocu', 'ptr', 'tca', 'pab', 'dno', 'oan', 'ppy', 'pal', 'cpo', 'eca', 'oni', 'osa', 'mtr', 'gma', 'rno', 'mml', 'bta', 'mdo', 'gga', 'mmu', 'hsa'}
+    # total 271 species
+    supported_prefix = {'hme', 'cpa', 'eel', 'dme', 'pny', 'nle', 'cin', 'gsa', 'oga', 'lja', 'hru', 'han', 'dya', 'lus', 'aly', 'dan', 'zma', 'bpcv2', 'ahy', 'ngi', 'ssl', 'blv', 'sfr', 'seu', 'smc', 'sko', 'cbr', 'bmo', 'pbv', 'ppt', 'bhv1', 'rmi', 'cst', 'fhe', 'sbo', 'egr', 'ccl', 'ppy', 'peu', 'dno', 'cte', 'dgr', 'racpv', 'oni', 'smo', 'ddi', 'nlo', 'sfv', 'gggpv1', 'hco', 'gso', 'pca', 'pta', 'ttu', 'mdm', 'meu', 'tgu', 'har', 'oha', 'cme', 'rco', 'bpcv1', 'nta', 'sme', 'mdo', 'chi', 'mcmv', 'dwi', 'jcv', 'nve', 'ctr', 'bhv5', 'hsv1', 'mne', 'eca', 'mdv2', 'hhi', 'aga', 'dvi', 'ama', 'tca', 'hbr', 'bfv', 'ata', 'hex', 'cca', 'bma', 'ghb', 'dsi', 'pti', 'rlcv', 'bol', 'bdi', 'dev', 'tch', 'mmr', 'lgi', 'smr', 'pbi', 'mghv', 'ath', 'crt', 'ssp', 'mmu', 'ccr', 'pgi', 'api', 'bbe', 'mdv1', 'tni', 'aau', 'pra', 'ppa', 'cbn', 'stu', 'rrv', 'mse', 'bna', 'vvi', 'isc', 'hvu', 'ame', 'prd', 'bgy', 'lva', 'vca', 'far', 'dre', 'ssa', 'mml', 'bcy', 'hpe', 'sja', 'lco', 'mze', 'sof', 'mja', 'sv40', 'aqc', 'htu', 'cqu', 'gra', 'aae', 'hpa', 'ssy', 'sma', 'aca', 'pal', 'hci', 'pvu', 'nbr', 'spu', 'sly', 'gar', 'bfl', 'crm', 'apl', 'pin', 'mcpv', 'dpr', 'ttv', 'mes', 'dma', 'hcmv', 'ipu', 'abu', 'lca', 'emu', 'tre', 'ssc', 'sla', 'bkv', 'dse', 'cre', 'mle', 'fve', 'cfa', 'bib', 'fru', 'cas', 'pol', 'pma', 'ppe', 'cel', 'gmo', 'str', 'odi', 'dmo', 'tcf', 'hbv', 'egu', 'iltv', 'amg', 'hma', 'hpo', 'ebv', 'cla', 'xtr', 'pde', 'smi', 'sbi', 'dpe', 'bta', 'ptr', 'osa', 'hhv6b', 'bdo', 'pha', 'mtr', 'ggo', 'rno', 'efu', 'gpy', 'aof', 'xbo', 'cli', 'cgr', 'age', 'tur', 'ami', 'gma', 'rgl', 'ocu', 'pte', 'hiv1', 'cln', 'csa', 'dps', 'esi', 'cja', 'oan', 'hvt', 'nvi', 'ppc', 'pxy', 'tcc', 'kshv', 'bra', 'eun', 'aqu', 'hsa', 'vun', 'aja', 'psj', 'ghr', 'pmi', 'pla', 'hvsa', 'mco', 'dpu', 'ptvpv2a', 'lmi', 'prv', 'sha', 'gga', 'sci', 'cpi', 'asu', 'tae', 'atr', 'hsv2', 'ptc', 'oar', 'der', 'xla', 'pab', 'csi', 'cpo', 'dqu', 'ola', 'lla'}
     
-    name_map1 = {
-        'human': 'hsa', 
-        'mouse': 'mmu',
-        'fruitfly': 'dme',
-        'worm': 'cel',
-        'celegans': 'cel',
-        'arabidopsis': 'ath',
-        'rice': 'osa',
-        }
+    
+    
+    name_map = [
+        ('human', 'hsa'), 
+        ('mouse', 'mmu'),
+        ('fruitfly', 'dme'),
+        ('fly', 'dme'),
+        ('rat', 'rno'),
+        ('worm', 'cel'),
+        ('celegans', 'cel'),
+        ('arabidopsis', 'ath'),
+        ('rice', 'osa'),
+        ('maize', 'zma'),
+        ('zmays', 'zma'),
+        ('corn', 'zma'),
+    ]
+    name_map2 = [
+        ('human', 'hsa'), 
+        ('mouse', 'mmu'),
+        ('rat', 'rno'),
+        ('fruitfly', 'fly', 'dme'),
+        ('worm', 'celegans', 'cel'),
+        ('arabidopsis', 'ath'),
+        ('rice', 'osa'),
+        ('maize', 'corn', 'zmays', 'zma')
+    ]
+    
+    name_map1 = dict(name_map)
     
     if list_org:
-        info = f'Supported organisms are:\nmiRBase organism prefixes:\n\t' + '\n\t'.join(supported_prefix)
-        info += f'common names:\n\t' + '\n\t'.join(sorted(name_map1))
+        info = f'Supported organisms are:\n'
+        tmp = [' / '.join(_) for _ in name_map2]
+        info += green('Common names:\n\t') + '\n\t'.join(tmp)
+        tmp = sorted(supported_prefix - set(name_map1.values()))
+        s = ''
+        n_per_line = 6
+        for idx, i in enumerate(tmp):
+            if idx % n_per_line == 0 and idx > 0:
+                s += '\n\t'
+            s += f'{i:<8}'
+        info += green(f'\nOther miRBase organism prefixes (n=264):\n\t') + s
         return info
     
     
