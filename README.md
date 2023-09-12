@@ -28,6 +28,16 @@ To achieve the best performance, installation of pyahocorasick is highly recomme
 ```
 pip install pyahocorasick
 ```
+
+## docker image
+A docker image is also available at https://hub.docker.com/r/chccode/findadapt
+`pyahocorasick` is installed, and the findadapt script is set as the entrypoint.
+
+```
+docker pull chccode/findadapt
+docker run  chccode/findadapt reads.fastq.gz  # for detailed synopsis / options, see below  
+```
+
  
 # SYNOPSIS   
 
