@@ -1,20 +1,13 @@
 # Motivation   
-Adapter trimming is an essential step for analyzing small RNA sequencing data where read length is greater than that of target DNA ranging from 18 to 30 bp.   
-   
-Most adapter trimming tools require adapter information as the input. Adapter information, however, are hard to access, specified incorrectly, or not provided in publicly available datasets, hampering their reproducibility and reusability. Identification of adapter patterns from raw reads is labor-intensive and error-prone. Moreover, the use of randomized adapters to reduce ligation biases in the library preparation makes adapter detection even more challenging. Here, we present FindAdapt, a python package for fast and accurate detection of adapter patterns without any prior information.   
+Adapter trimming is an essential step for analyzing small RNA sequencing data where read length is greater than that of target DNA ranging from 18 to 30 bp. Identification of adapter patterns from raw reads is labor-intensive and error-prone. Moreover, the use of randomized adapters to reduce ligation biases in the library preparation makes adapter detection even more challenging. 
    
 # About FindAdapt   
-FindAdapt is a python package for identifying and trimming (if specified in the argument) adapter sequences for small RNA sequencing data.   
-FindAdapt can also identify the random sequences (such library prepared by NextFlex kit or template switching kits such as SMARTer / CATS kit).   
-FindAdapt do not depend on prior knowledge about the adapter, so it can also correctly identify the customized adapter sequences.   
-   
-We also tested the package on fastq files from 3148 biosamples which covers different library prepartion kits, adapter pattern and reads structure, FindAdapt can correctly identify the adapter sequences.   
-   
-FindAdapt is written in Python3 and is a stand-alone script without any package requirements (If need to trim fastq file after adapter detection, you need to install cutadapt package first).   
+FindAdapt is a Python package for identifying adapter patterns for small RNA sequencing data without dependency on prior information.   
 
 # Installation
-FindAdapt is dependency-free python package (python >=3.6), you can download the code of this repo and use it directly:
+FindAdapt is a stand-alone Python package (python >=3.6).
 
+## Download and uncompress
 ```bash
 wget https://github.com/chc-code/findadapt/archive/refs/heads/master.zip
 unzip master.zip  # the output folder will be findadapt-master
@@ -23,19 +16,20 @@ unzip master.zip  # the output folder will be findadapt-master
 cd findadapt-master
 ./findadapt  -h
 ```
-## pyahocorasick
-To achieve the best performance, installation of pyahocorasick is highly recommended using
+
+To achieve the best performance, installation of pyahocorasick is highly recommended. 
 ```
+# install pyahocorasick
 pip install pyahocorasick
 ```
 
 ## docker image
 A docker image is also available at https://hub.docker.com/r/chccode/findadapt
-`pyahocorasick` is installed, and the findadapt script is set as the entrypoint.
+`pyahocorasick` is contained, and the findadapt script is set as the entrypoint.
 
 ```
 docker pull chccode/findadapt
-docker run  chccode/findadapt reads.fastq.gz  # for detailed synopsis / options, see below  
+docker run  chccode/findadapt reads.fastq.gz  
 ```
 
  
@@ -45,11 +39,8 @@ docker run  chccode/findadapt reads.fastq.gz  # for detailed synopsis / options,
       findadapt reads.fastq.gz -organism mouse
       findadapt -list_org
       
-      #  run the first 5 samples of each study to infer the adapter sequence, mouse samples
-      findadapt -fn_fq_list  fq_list.txt -organism mouse
-
-      # run all samples of each study to infer the adapter sequence, mouse samples
-      findadapt -fn_fq_list  fq_list.txt -organism mouse -nsam -1 
+      # identify adapter sequences for all samples of a study from mice 
+      findadapt -fn_fq_list fq_list.txt -organism mouse
 
       # trim the identified adapters using cutadapt package 
       findadapt reads.fastq.gz -pw_cutadapt path/to/cutadapt -cut  
@@ -61,21 +52,21 @@ docker run  chccode/findadapt reads.fastq.gz  # for detailed synopsis / options,
 You can only select one option (either `-fq` or `-prj`) as the input
 
 - `fn_fq_file`   Optional positional argument,  the path for single fastq file   
-- `-fn_fq_list / -list / -l file_list`   text file, contains the fastq list. column1 = study ID, column2 = fastq file path. 
+- `-fn_fq_list / -list / -l file_list`   a tab-delimited file, containing the list of fastq files. column1 = study ID, column2 = path of the fastq file. 
 
 ## Reference sequences
-Can be user specified sequence list (fasta format or one sequence per line) or organism name by `-organism`
-- `-fn_refseq filename`  User specified sequence known to express in the dataset, can be fasta format or one sequence per line.   
-- `-organism / -org str` organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other
-- `-list_org`  list the supported organism and exit
+either a list of sequences (fasta format or one sequence per line) by '-fn_refseq' or organism name by `-organism`
+- `-fn_refseq filename`   a list of sequences in fasta format or one sequence per line.   
+- `-organism / -org str`   organism name (for example, human, mouse, fruitfly, worm, arabidopsis, rice);  default: human.  Alternatively, the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other
+- `-list_org`  list the supported organisms 
 
 
 ## Output options   
 - `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file
 - `-quiet / -q` , toggle, suppress the pyahocorasick not installed warning
-- `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process, need the cutadapt already installed and available in PATH   
-- `-pw_cutadapt str`  specify the cutadapt path, default is search from PATH   
-- `-v / -verbose` flag, display the full logging information in the terminal   
+- `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process; require the cutadapt already installed and available in PATH   
+- `-pw_cutadapt str`  the path of cutadapt, the default is from PATH   
+- `-v / -verbose` flag, display the log information in the terminal   
    
    
 ## Other Options
@@ -93,12 +84,12 @@ Can be user specified sequence list (fasta format or one sequence per line) or o
 
 # Examples   
    
-Here we provided several fastq files from 3 studies   
-1. GSE106303, the adapter sequence is not specified in the GEO database or article   
-2. GSE122068, NextFLEX library preparation kit, the reads will have 4N random sequence at both 5' and 3' end of the insert   
-3. GSE137617, SMARTer library preparation kit, the 3' adapter sequence of the reads is polyA, and have multiple (usually 3 nt) random sequence at the 5' end   
+We provided several fastq files from three studies   
+1. GSE106303, the adapter sequence is not specified in the GEO database or the literature  
+2. GSE122068, generated by NextFLEX library preparation kit where reads  have 4N random sequence at both the 5' and 3' ends 
+3. GSE137617, generated by SMARTer library preparation kit where multiple (usually 3 nt) random bps at the 5' end and polyA as the 3' adapter sequence
    
-you can run get the adapter by   
+To identify adapter sequences  
 `./findadapt <fn_fq>`   
    
  for example, GSE122068.nextflex.SRR8144939.truncated.fastq.gz   
