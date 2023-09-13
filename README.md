@@ -132,7 +132,7 @@ The detail adapter information of each input fastq file
 
 # Trim the adapter using cutadapt
 Users can remove the adapter using the identified pattern by specifying `-cut` 
-Or use the output to build your own cutadapt command.
+Or use the output to build their own cutadapt command.
 
 ```
 # if 3p_seq is empty and 5p_phase > 0:
