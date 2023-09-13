@@ -130,7 +130,7 @@ The detail adapter information of each input fastq file
 | single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 5p   | 1  |              | 4     | 1143  | 0.9711 |
 
 
-# trim the adapter
+# Trim the adapter using cutadapt
 Users can remove the adapter using the identified pattern by specifying `-cut` 
 Or use the output to build your own cutadapt command.
 
