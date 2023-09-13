@@ -1,5 +1,5 @@
 # Motivation   
-Adapter trimming is an essential step for analyzing small RNA sequencing data where read length is greater than that of target DNA ranging from 18 to 30 bp. Identification of adapter patterns from raw reads is labor-intensive and error-prone. Moreover, the use of randomized adapters to reduce ligation biases in the library preparation makes adapter detection even more challenging. 
+Adapter trimming is an essential step for analyzing small RNA sequencing data where read length is longer than that of target RNAs ranging from 18 to 30 bp. Identification of adapter patterns from raw reads is labor-intensive and error-prone. Moreover, the use of randomized adapters to reduce ligation biases in the library preparation makes adapter detection even more challenging. 
    
 # About FindAdapt   
 FindAdapt is a Python package for identifying adapter patterns for small RNA sequencing data without dependency on prior information.   
@@ -17,7 +17,7 @@ cd findadapt-master
 ./findadapt  -h
 ```
 
-To achieve the best performance, installation of pyahocorasick is highly recommended. 
+To achieve the best performance, the installation of pyahocorasick is highly recommended. 
 ```
 # install pyahocorasick
 pip install pyahocorasick
