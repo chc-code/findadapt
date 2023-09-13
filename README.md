@@ -79,7 +79,7 @@ either a list of sequences (fasta format or one sequence per line) by '-fn_refse
 - `-min_reads int`  minimum matched reads number for infering per fastq file, default=30, if lower than this value, the adapter inferring step will be skip, you may need to check the reference settings.   
 - `-threads / -cpu int` the threads to use, by default = 5. Usually, the performance won't improve greatly when more than 5 threads are used (refer to the manuscript for detail)   
 - `-enough_reads int` enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000   
-- `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when you used new reference.   
+- `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when use a new reference.   
 
 
 # Examples   
