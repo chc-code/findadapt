@@ -63,7 +63,7 @@ either a list of sequences (fasta format or one sequence per line) by '-fn_refse
 
 ## Output options   
 - `-o prefix`,str, optional, the prefix for the output results, if not specified, will infer from the input file
-- `-quiet / -q` , toggle, suppress the pyahocorasick not installed warning
+- `-quiet / -q` , toggle, suppress the warning message if pyahocorasick not installed 
 - `-cut / -cutadapt/ -trim`  flag,  run the cutadapt process; require the cutadapt already installed and available in PATH   
 - `-pw_cutadapt str`  the path of cutadapt, the default is from PATH   
 - `-v / -verbose` flag, display the log information in the terminal   
