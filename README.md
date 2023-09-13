@@ -25,7 +25,7 @@ pip install pyahocorasick
 
 ## docker image
 A docker image is also available at https://hub.docker.com/r/chccode/findadapt
-`pyahocorasick` is contained, and the findadapt script is set as the entrypoint.
+(`pyahocorasick` is contained, and the findadapt script is set as the entrypoint.)
 
 ```
 docker pull chccode/findadapt
