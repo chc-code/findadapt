@@ -74,9 +74,9 @@ either a list of sequences (fasta format or one sequence per line) by '-fn_refse
 - `-max_random_linker int`   the maximum length of random-mer, default = 8 bp
 - `-nreads int`  the maximum number of reads used to find adapter, default: 1 million, if use all reads, set as -1
 - `-nsam int`  the number of samples foradapter identification in a file list,  default: all samples
-- `-thres_multiplier float`    the threshold of the ratio between the count of the child and the count of the parent, default=1.2; if >1.2, save the child record; otherwise, save the parent record
+- `-thres_multiplier float`    the threshold of the ratio between the count of the child and the count of the parent, default=1.2; if >=1.2, save the child record; otherwise, save the parent record
 - `-min_reads int`  the minimum number of matched reads for adapter identification, default=30. if lower than this value, the adapter identification will fail and users may need to check the reference settings.   
-- `-threads / -cpu int` the number of threads , by default = 5. 
+- `-threads / -cpu int` the number of threads, default = 5. 
 - `-enough_reads int` the number of matched reads for adapter identification, default=1000   
 - `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when use a new reference.   
 
