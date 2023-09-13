@@ -70,15 +70,14 @@ either a list of sequences (fasta format or one sequence per line) by '-fn_refse
    
    
 ## Other Options
-- `-expected_adapter_len int`  expected adapter length to discover, by default, 12 nt   
-- `-max_random_linker int`   max allowed random seqence length, default = 8
-- `-nreads int`  max reads number used to find adapter, default is 1 million, if use all reads, set as -1
-- `-nsam int`  for studies with multiple samples/fastq files, by default, will use first 5 files to infer the adapter pattern for this study. You can change the number by this parameter. If you need to use all samples, set as -1   
-- `-thres_multiplier float`    the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporting each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including, default=1.2
-
-- `-min_reads int`  minimum matched reads number for infering per fastq file, default=30, if lower than this value, the adapter inferring step will be skip, you may need to check the reference settings.   
-- `-threads / -cpu int` the threads to use, by default = 5. Usually, the performance won't improve greatly when more than 5 threads are used (refer to the manuscript for detail)   
-- `-enough_reads int` enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000   
+- `-expected_adapter_len int`  the length of adapter sequence, default = 12 bp   
+- `-max_random_linker int`   the maximum length of random-mer, default = 8 bp
+- `-nreads int`  the maximum number of reads used to find adapter, default: 1 million, if use all reads, set as -1
+- `-nsam int`  the number of samples foradapter identification in a file list,  default: all samples
+- `-thres_multiplier float`    the threshold of the ratio between the count of the child and the count of the parent, default=1.2; if >1.2, save the child record; otherwise, save the parent record
+- `-min_reads int`  the minimum number of matched reads for adapter identification, default=30. if lower than this value, the adapter identification will fail and users may need to check the reference settings.   
+- `-threads / -cpu int` the number of threads , by default = 5. 
+- `-enough_reads int` the number of matched reads for adapter identification, default=1000   
 - `-f`  `-force`  flag, force rerun the analysis, ignoring the exisiting parsed reads,  can be useful when use a new reference.   
 
 
