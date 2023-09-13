@@ -49,7 +49,7 @@ docker run  chccode/findadapt reads.fastq.gz
 # COMMANDS AND OPTIONS  
 
 ## File input
-You can only select one option (either `-fq` or `-prj`) as the input
+Users: can only select one option (either `-fq` or `-prj`) as the input
 
 - `fn_fq_file`   Optional positional argument,  the path for single fastq file   
 - `-fn_fq_list / -list / -l file_list`   a tab-delimited file, containing the list of fastq files. column1 = study ID, column2 = path of the fastq file. 
@@ -57,7 +57,7 @@ You can only select one option (either `-fq` or `-prj`) as the input
 ## Reference sequences
 either a list of sequences (fasta format or one sequence per line) by '-fn_refseq' or organism name by `-organism`
 - `-fn_refseq filename`   a list of sequences in fasta format or one sequence per line.   
-- `-organism / -org str`   organism name (for example, human, mouse, fruitfly, worm, arabidopsis, rice);  default: human.  Alternatively, the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other
+- `-organism / -org str`   organism name (such as human, mouse, fruitfly, worm, arabidopsis, rice or the miRBase prefix, such as hsa, mmu, dme, cel, ath, osa);  default: human. 
 - `-list_org`  list the supported organisms 
 
 
@@ -105,17 +105,33 @@ To identify adapter sequences
 2023-09-08 08:13:02  INFO   export_data           line: 1290   result per-fq = GSE122068.nextflex.SRR8144939.truncated.per_fq.adapter.txt
 ```
 ## .adapter.txt
-The output contains the following columns
+The output contains the following columns:
 **Prj**: The output prefix, if the input is a single fastq file rather than a fastq file list (-fn_fq_list), it will be "single"
 **total_reads**: Total matched reads used for adapter identification
 **3p_seq**:  The sequence of 3' adapter
 **3p_phase**: the random sequence length before 3' adapter
-**3p_count / 3p_reatio**: The number and ratio of reads supporting this 3' adapter sequence and random sequence length
+**3p_count / 3p_ratio**: The number and ratio of reads supporting this 3' adapter sequence and random sequence length
 **5p_phase**:  the random sequence length before the insert
 **5p_count / 5p_ratio**:  The number and ratio of reads supporting this 5' random sequence length 
 **err**:  the error information if fail to get the adapter sequence, 
 
-You can remove the adapter using the identified pattern by specifying `-cut` 
+| prj    | total_reads | 3p_seq       | 3p_phase | 3p_count | 3p_ratio | 5p_phase | 5p_count | 5p_ratio | err |
+|--------|-------------|--------------|----------|----------|----------|----------|----------|----------|-----|
+| single | 1177        | TGGAATTCTCGG | 4        | 1021     | 0.8667   | 4        | 1143     | 0.9711   |
+
+
+## .per_fq.adapter.txt
+The detail adapter information of each input fastq file
+
+| prj    | fastq                                   | total_reads | side | sn | seq          | phase | count | ratio  |
+|--------|-----------------------------------------|-------------|------|----|--------------|-------|-------|--------|
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 1  | TGGAATTCTCGG | 4     | 1021  | 0.8675 |
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 2  | CTGGAATTCTCG | 3     | 633   | 0.5378 |
+| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 5p   | 1  |              | 4     | 1143  | 0.9711 |
+
+
+# trim the adapter
+Users can remove the adapter using the identified pattern by specifying `-cut` 
 Or use the output to build your own cutadapt command.
 
 ```
@@ -136,17 +152,6 @@ Or use the output to build your own cutadapt command.
 ```
 
 
-| prj    | total_reads | 3p_seq       | 3p_phase | 3p_count | 3p_ratio | 5p_phase | 5p_count | 5p_ratio | err |
-|--------|-------------|--------------|----------|----------|----------|----------|----------|----------|-----|
-| single | 1177        | TGGAATTCTCGG | 4        | 1021     | 0.8667   | 4        | 1143     | 0.9711   |
 
 
-## .per_fq.adapter.txt
-The detail adaoter information of every input fastq file
-
-| prj    | fastq                                   | total_reads | side | sn | seq          | phase | count | ratio  |
-|--------|-----------------------------------------|-------------|------|----|--------------|-------|-------|--------|
-| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 1  | TGGAATTCTCGG | 4     | 1021  | 0.8675 |
-| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 3p   | 2  | CTGGAATTCTCG | 3     | 633   | 0.5378 |
-| single | GSE122068.nextflex.SRR8144939.truncated | 1177        | 5p   | 1  |              | 4     | 1143  | 0.9711 |
 
