@@ -32,12 +32,12 @@ ps.add_argument('-list_org', help="""list the supported organism and exit""", ac
 ps.add_argument('-nreads',  help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
 ps.add_argument('-nsam', '-ns', help="""how many samples used to check, if all, use -1, only valid for -gse, default=5""", default=5, type=int)
 ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
-ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 6""", type=int, default=6)
+ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 8""", type=int, default=8)
 ps.add_argument('-expected_adapter_len', '-adapt_len', help="""expected adapter len to discover, default = 12 nt""", type=int, default=12)
 ps.add_argument('-thres_multiplier', '-thres', help="""the multiplier threshold for accepting an extra random base from a lower phase. e.g for 2 possible (3p-random_sequence_lengh, adapter_seq) : (0, seq1), (1, seq2), the reads supporting each combination is n1 and n2 respectively,  (1, seq2) will only be accepted if n2 > n1 * thres_multiplier. this argument is to avoid the including unnecessary random sequence due to sporadic minor count difference, default is 1.2""", type=float, default=1.2)
 ps.add_argument('-min_reads', '-min', help="""minimum matched reads number for infering per fastq file, default=30""", type=int, default=30)
 ps.add_argument('-threads', '-cpu', help="""threads to use, default=5, the speed won't improve when threads is more than 5""", type=int, default=5)
-ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=1000""", type=int, default=1000)
+ps.add_argument('-enough_reads', '-enough', '-e', help="""enough matched reads number for infering per fastq file, after reaching, will stop reading the raw fastq file, default=600""", type=int, default=600)
 ps.add_argument('-cut', '-cutadapt', '-trim', help="""run the cutadapt process, need the cutadapt already installed and available in PATH""", action='store_true')
 ps.add_argument('-print', '-printonly', '-p', help="""print only, do not write to file""", action='store_true')
 ps.add_argument('-pw_cutadapt', help="""specify the cutadapt path, default is search from PATH""")
@@ -276,6 +276,7 @@ def extend_seq(mat_seq, left_flank, right_flank, primary_padding_dict):
     # if left_shift:
     #     mat_seq = left_flank[-left_shift:] + mat_seq
     #     left_flank = left_flank[:-left_shift]
+    
     return mat_seq, left_flank,  right_flank
 
 def parse_read_seq_mirna_pyahocorasick(seq, aho_model, primary_padding_dict, blocked_seq):
@@ -329,7 +330,6 @@ def pick_3p_adapter(adapter_ct):
             elif ct > adapter_ct_by_seq[seq][1]:
                 adapter_ct_by_seq[seq][1] = ct
     
-    
     for phase in range(max_random_linker):
         try:
             top5_seq = sorted(adapter_ct[phase].items(), key=lambda _: _[1], reverse=True)[:5]
@@ -337,19 +337,26 @@ def pick_3p_adapter(adapter_ct):
             # this phase have no adapter found
             continue
         for seq, ct in top5_seq:
-            for shift in range(1, 5):
-                child_seq = seq[shift:]
-                if child_seq not in lineage:
+            child_seq = seq[1:]
+            if child_seq not in lineage:
+                lineage[child_seq] = [seq, phase, ct]
+                
+            # same squence, different phase, current phase is higher, 
+            # only replace when the count is much bigger
+            elif seq == lineage[child_seq][idx_seq]:
+                if ct > lineage[child_seq][idx_ct] * thres_multiplier:
                     lineage[child_seq] = [seq, phase, ct]
-                # if the seq from shifted are the same as the non-shifted
-                elif seq == lineage[child_seq][idx_seq]:
-                    if ct > lineage[child_seq][idx_ct]:
-                        lineage[child_seq] = [seq, phase, ct]
-                elif phase == lineage[child_seq][idx_phase]:  # same phase, choose the largest count
-                    if ct > lineage[child_seq][idx_ct]:
-                        lineage[child_seq] = [seq, phase, ct]
-                elif ct > lineage[child_seq][idx_ct] * 2:
+            # same phase, choose the largest count
+            elif phase == lineage[child_seq][idx_phase]:  
+                if ct > lineage[child_seq][idx_ct]:
                     lineage[child_seq] = [seq, phase, ct]
+            # different phase, the first base is different
+            # current phase is higher
+            # only replace when the count is much bigger
+            elif ct > lineage[child_seq][idx_ct] * thres_multiplier:
+                lineage[child_seq] = [seq, phase, ct]
+
+    # logger.info(lineage)
 
     res = []
     keep_status = {}
@@ -371,9 +378,10 @@ def pick_3p_adapter(adapter_ct):
             phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
             if phase <= phase_tmp and ct_tmp > ct:
                 ct = ct_tmp
-            if phase == 0:
-                res.append([seq, phase, ct])
-                continue
+                
+            # if phase == 0:
+            #     res.append([seq, phase, ct])
+            #     continue
             skip = 0
             for seq_tmp, v_tmp in adapter_ct_by_seq.items():
                 if seq_tmp == seq and phase == v_tmp[0]:
@@ -382,12 +390,20 @@ def pick_3p_adapter(adapter_ct):
                 if seq_tmp == seq and phase > v_tmp[0]:
                     # same sequence, but other has smaller phase
                     skip = 1
+                    reason = 'same_seq,lower_phase_found'
                     break
-                if seq in seq_tmp and phase >= v_tmp[0]:
-                    # is a subsequence of the upper level sequence
+                if seq in seq_tmp and phase > v_tmp[0]:
+                    # is a subsequence of the lower phase sequence
+                    reason = 'subsequence of lower_phase'
+                    skip = 1
+                    break
+                if seq in seq_tmp and phase == v_tmp[0] and ct < vtmp[1]:
+                    # is a subsequence of the same phase, but
+                    reason = 'subsequence of same phase, but count is lower'
                     skip = 1
                     break
             if skip:
+                # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
                 continue
 
             # there are 3 cases
@@ -395,24 +411,24 @@ def pick_3p_adapter(adapter_ct):
             # 2 = parent found, parent = drop -  drop
             # 3 = parent not found - keep
             current_lb = f'{seq}_{phase}'
-
             # for the empty adapter,
             if seq == '':
                 if ct > empty_adapter_ct[1] * thres_multiplier:
                     empty_adapter_ct[1] = ct
                     empty_adapter_ct[0] = phase
                 continue
-            for shift in range(1, 7):
-                seq_truncated = seq[:-shift]
-                if seq_truncated in lineage:
-                    parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
-                    parent_lb = f'{parent_seq}_{parent_phase}'
-                    if ct < parent_ct * (max(thres_multiplier, 1 + 0.1 * parent_phase)):
-                        skip = 1
-                        break
+            seq_truncated = seq[:-1]
+            if seq_truncated in lineage:
+                parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
+                # parent_lb = f'{parent_seq}_{parent_phase}'
+                if parent_phase <= phase and ct < parent_ct *thres_multiplier:
+                    skip = 1
+                    break
             if skip:
                 continue
             res.append([seq, phase, ct])
+
+    # logger.info(res)
 
     if polyA_ct > max_ct * 0.4:
         return [['A' * 10, 0, polyA_ct]]
@@ -421,6 +437,7 @@ def pick_3p_adapter(adapter_ct):
         res.append([''] + empty_adapter_ct)
     
     try:
+        # sort by phase
         res = sorted(res, key=lambda _: _[1], reverse=True)
         max_ct = res[0][idx_ct]
     except:
@@ -572,7 +589,6 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=1, 
                     except:
                         pass
                 continue
-
             ct[phase][seq] = round(seq_ct, 2)
             if seq_ct < max_ct * 0.5:
                 del ct[phase][seq]
@@ -828,10 +844,8 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
     logger.debug(green(f'new parsed reads = {len(parsed_reads)}'))
     if parsed_reads_prev:
         parsed_reads += parsed_reads_prev
-        logger.debug(green(f'extended parsed reads = {len(parsed_reads)}'))
 
     if len(parsed_reads) > max(enough_parsed_reads_orig//2, 300):
-        logger.info(green(f'matched reads found: {len(parsed_reads)}'))
         return parsed_reads, n_processed, fh
 
     if end_reached:
@@ -903,7 +917,7 @@ def get_fq_lb(fn_fq):
 
     return fq_lb1
 
-def check_dominant(fn_fq, parsed_reads, adapter3_seq):
+def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     """
     1. check if certain miRNA seq is dominant  in the parsed reads result
     2. calc the ratio of the found 3' adapter in the first 1000 reads of the file
@@ -933,13 +947,31 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
         is_dominant = 0
         dominant_seq = None
     
+    from_scratch = 0
+    try:
+        fh_prev.tell()
+        fh_prev.readline()
+        fh_prev.readline()
+        fh_prev.readline()
+        tmp = fh_prev.readline()
+        if not tmp:
+            from_scratch = 1
+    except:
+        from_scratch = 1
     
-    fh = get_file_handle(fn_fq)
+    if from_scratch:
+        fh = get_file_handle(fn_fq)
+    else:
+        fh = fh_prev
+    
+    # logger.info(f'current position = {fh.tell()}')
     
     n = 0
     n_reads_check = 5000 # check the 3' adapter in first 1000 reads
     
     n_found = 0
+    polyN = 'NNNNNNNNNN'
+    polyN_count = 0
     if adapter3_seq and len(adapter3_seq) > 8:
         while True:
             n += 1
@@ -955,6 +987,11 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
                 break
             fh.readline()
             fh.readline()
+            try:
+                if seqraw[5:15] == polyN:
+                    continue
+            except:
+                continue
             
             if adapter3_seq in seqraw:
                 n_found += 1
@@ -968,9 +1005,15 @@ def check_dominant(fn_fq, parsed_reads, adapter3_seq):
 
     if adapter_ratio < 0.4:
         logger.debug(red(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
+        if adapter_ratio < 0.01:
+            is_dominant = 1
+            # if seq_top10[0][1] > 0.2:
+            dominant_seq = seq_top10[0][0]
     else:
         logger.debug(green(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
-        is_dominant = 0
+            
+    # if adapter_ratio > 0.6 and seq_top10[0][1] < 0.
+    #     # is_dominant = 0
 
     return is_dominant, dominant_seq
 
@@ -1028,19 +1071,33 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
     adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads, adapter3)
 
     # check for dominant miRNA
-    is_dominant, dominant_seq = check_dominant(fn_fq, parsed_reads, adapter3[0][0])
+    is_dominant, dominant_seq = check_dominant(fn_fq, fh, parsed_reads, adapter3[0][0])
 
     if is_dominant:
-        if recursive_round > 3:
+        if recursive_round > 6:
             logger.error(red(f'recusive run round = {recursive_round}, dominant sequence still exist or the identified adapter frequency found in fastq file is too low'))
             return None
-        logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}')
-        if glob_var['blocked_seq'] is None:
-            glob_var['blocked_seq'] = {dominant_seq, }
+        if recursive_round < 3:
+            logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}')
+            if glob_var['blocked_seq'] is None:
+                glob_var['blocked_seq'] = {dominant_seq, }
+            else:
+                glob_var['blocked_seq'].add(dominant_seq)
+            parsed_reads_new = [_ for _ in parsed_reads if _[1] != dominant_seq]
         else:
-            glob_var['blocked_seq'].add(dominant_seq)
-        
-        parsed_reads_new = [_ for _ in parsed_reads if _[1] != dominant_seq]
+            logger.debug(f'recursive run round {recursive_round}, ignore all prev parsed_reads')
+            
+            seq_all = {}
+            for i in parsed_reads:
+                iseq = i[1]
+                seq_all.setdefault(iseq, 0)
+                seq_all[iseq] += 1
+            top_mirna = sorted(seq_all.items(), key=lambda _: _[1], reverse=True)[:5]
+            # exclude the first 20 most abundant miRNA
+            glob_var['blocked_seq'] |= {_[0] for _ in top_mirna}
+            logger.info(f"blocked seq count = {len(glob_var['blocked_seq'])}")
+            
+            parsed_reads_new = [_ for _ in parsed_reads if _[1] not in glob_var['blocked_seq']]
 
         return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1)
 
