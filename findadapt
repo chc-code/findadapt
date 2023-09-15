@@ -434,26 +434,34 @@ def pick_3p_adapter(adapter_ct):
     
     try:
         # sort by phase
-        res = sorted(res, key=lambda _: _[1], reverse=True)
+        res = sorted(res, key=lambda _: _[1])
         max_ct = res[0][idx_ct]
     except:
         return res
+        
+    # logger.info(res)
 
     # each phase, only retain 1
     res_final = []
     dedup = {}  # key = phase, v = current largest count
+    max_phase_ct = {}
     for i in res:
         phase = i[idx_phase]
         ct = i[idx_ct]
+        cttmp = max_phase_ct.get(phase) or 0
+        if ct > cttmp:
+            max_phase_ct[phase] = ct
+        if phase > 0:
+            max_ct_lower_phase = sorted([v for k, v in max_phase_ct.items() if k < phase])
+            if max_ct_lower_phase and ct < max(max_ct_lower_phase) * max(thres_multiplier, 1 + phase/10):
+                continue
         if ct < max_ct / 2:
             continue
         if phase not in dedup:
             dedup[phase] = i
         elif ct > dedup[phase][idx_ct]:
             dedup[phase] = i
-
     res_final = sorted(dedup.values(), key=lambda _: _[2], reverse=True)
-
     return res_final
 
 
@@ -672,26 +680,26 @@ def parse_fq_reads(fh, parse_read_func, aho_model, primary_padding_dict, blocked
     """
 
     parsed_reads = []
-    n = 0
     n_processed = 0
-    end_reached = 0
 
+    n = 0
+    end_reached = 0
     while True:
-        s = time.time()
-        n += 1
         header = fh.readline()
+        if not header:
+            end_reached = n
+            logger.info(f'end reached, n_reads = {n}, pos = {fh.tell()}')
+            break
         try:
             # because of random start of the file chunk, the fh may be in the middle of a read
             if header[0] != '@':
-                logger.warning(f'bad fq format: {header}')
                 continue
             seqraw = fh.readline()[:-1] # seq
         except:
-            end_reached = n
-            break
+            continue
         fh.readline()
         fh.readline()
-
+        n += 1
         # s = record('read', s)
         if sn is None or n % threads == sn:
             tmp = parse_read_func(seqraw, aho_model, primary_padding_dict, blocked_seq)
@@ -759,7 +767,7 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
             logger.warning(red(f'file handle not seekable'))
 
     for i in range(rounds):  # each round, 100k,  totally 20 million
-        logger.debug(f'\t\treading {reads_per_round_str} * {i+1} reads')
+        # logger.debug(f'\t\treading {reads_per_round_str} * {i+1} reads')
         iparsed, end_reached, fh = parse_fq_reads(fh, parse_read_func, aho_model,primary_padding_dict, blocked_seq, nreads=reads_per_round, enough_parsed_reads=enough_parsed_reads, threads=threads, sn=sn)
         parsed_reads += iparsed
         n_parsed = len(parsed_reads)
@@ -769,7 +777,7 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
         n_processed = (i + 1) * reads_per_round
         matched_ratio = n_processed / (n_parsed + 0.1) # avoid n_parse = 0
 
-        logger.debug(f'\t\tthread: {sn_str} - file position = {fh.tell()/1024/1024:.2f}M, processed = {n_processed}, newly parsed = {len(iparsed)}, total matched reads = {n_parsed}, ratio = {matched_ratio:.0f}')
+        # logger.debug(f'\t\tthread: {sn_str} - file position = {fh.tell()/1024/1024:.2f}M, processed = {n_processed}, newly parsed = {len(iparsed)}, total matched reads = {n_parsed}, ratio = {matched_ratio:.0f}')
 
         if n_processed > (n_processed_for_too_few - 10) and matched_ratio > 5000:
             logger.debug(red(f'\t\tstopped due to processed_vs_matched_ratio too high: {matched_ratio:.0f}, processed = {n_processed}, thres = {n_processed_for_too_few}'))
@@ -800,7 +808,7 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
     
     total_max_reads_to_process = max(enough_parsed_reads, 1000) * 1000 # at least find 1 matched read out of 300 processed reads
     n_processed_for_too_few = 4_000_000
-    
+    end_reached = 0
     enough_parsed_reads_orig = enough_parsed_reads
     
     if parsed_reads_prev:
@@ -842,11 +850,11 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
         parsed_reads += parsed_reads_prev
 
     if len(parsed_reads) > max(enough_parsed_reads_orig//2, 300):
-        return parsed_reads, n_processed, fh
+        return parsed_reads, n_processed, fh, end_reached
 
     if end_reached:
         logger.info(f'file has been fully read, total reads = {n_processed}, matched reads = {len(parsed_reads)}')
-        return parsed_reads, n_processed, fh
+        return parsed_reads, n_processed, fh, end_reached
 
     # get half 
     enough_parsed_reads_orig = max(enough_parsed_reads_orig//2, 300)
@@ -857,7 +865,7 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
         parsed_reads_new, n_processed_new = process_chunk(fn_fq, shared_vars, end_pos, total_max_reads_to_process=total_max_reads_to_process, n_processed_for_too_few=n_processed_for_too_few, enough_parsed_reads=enough_parsed_reads, threads=1, sn=None, fh=fh)[:2]
         parsed_reads += parsed_reads_new
         n_processed += n_processed_new
-        return parsed_reads, n_processed, fh
+        return parsed_reads, n_processed, fh, end_reached
 
     if end_pos:
         enough_parsed_reads = enough_parsed_reads_orig - len(parsed_reads)
@@ -879,10 +887,12 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
         chunk_results = p.starmap(process_chunk, chunk_args)
 
     sn_thread = 0
-    for i, i_n_processed, _fh, _endpos, end_reached in chunk_results:
+    for i, i_n_processed, _fh, _endpos, end_reached_i in chunk_results:
         parsed_reads.extend(i)
         n_processed += i_n_processed
-    return parsed_reads, n_processed, fh
+        if end_reached_i:
+            end_reached = end_reached_i
+    return parsed_reads, n_processed, fh, end_reached
 
 def get_file_handle(fn_fq):
     if fn_fq.endswith('.gz'):
@@ -966,42 +976,57 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     n_reads_check = 5000 # check the 3' adapter in first 1000 reads
     
     n_found = 0
-    polyN = 'NNNNNNNNNN'
+    polyN = {_ * 10 for _ in 'NATCG'}
     polyN_count = 0
+    end_reached = 0
+        
     if adapter3_seq and len(adapter3_seq) > 8:
         while True:
-            n += 1
             header = fh.readline()
+            if not header:
+                end_reached = n
+                break
             try:
                 # because of random start of the file chunk, the fh may be in the middle of a read
                 if header[0] != '@':
-                    logger.warning(f'bad fq format: {header}')
+                    # logger.warning(f'bad fq format: {header}')
                     continue
                 seqraw = fh.readline()[:-1].upper() # seq
             except:
-                end_reached = n
-                break
-            fh.readline()
-            fh.readline()
-            try:
-                if seqraw[5:15] == polyN:
-                    continue
-            except:
+                raise
                 continue
             
+            fh.readline()
+            fh.readline()
+
+            try:
+                if seqraw[5:15] in polyN:
+                    continue
+            except:
+                raise
+                continue
+
             if adapter3_seq in seqraw:
                 n_found += 1
-            
+            n += 1
+
             if n > n_reads_check:
                 break
-    
+        n = n or 1
         adapter_ratio = round(n_found/ n, 4)
     else:
         adapter_ratio = 1
+    
+    if end_reached > 0 and end_reached < n_reads_check:
+        # the fh passed in is near the end
+        # assume one reads use 400 byte, to get the pos of 2000 reads
+        fh.seek(400 * 5000)
+        logger.info(f'file end reached, now return to file start')
+        return check_dominant(fn_fq, fh, parsed_reads, adapter3_seq)
 
     if adapter_ratio < 0.4:
         logger.debug(red(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
-        if adapter_ratio < 0.01:
+        if adapter_ratio < 0.01 and adapter3_seq not in {'TCTGGAATTCTC', 'TGGAATTCTCGG', 'AGATCGGAAGAG', 'GATCGGAAGAGC', 'AACTGTAGGCAC', 'ATCTCGTATGCC'}:
             is_dominant = 1
             # if seq_top10[0][1] > 0.2:
             dominant_seq = seq_top10[0][0]
@@ -1014,15 +1039,16 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     return is_dominant, dominant_seq
 
 
-def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0, end_reached=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
     if parsed_reads_prev:
-        logger.debug(f'parsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
+        logger.debug(f'\tparsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
 
     # process the reads
     fq_lb1 = get_fq_lb(fn_fq)
     do_parse_reads = True
 
+    parsed_reads = None
     fn_parsed_redas = f'{pw_data}/{fq_lb1}.parsed_reads.pkl'
     if not force_parse_reads and recursive_round == 0:
         try:
@@ -1035,10 +1061,13 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
 
     if fh is not None and recursive_round == 0:
         threads = 1
+    
+    if end_reached:
+        do_parse_reads = False
 
     n_processed = -1
     if do_parse_reads:
-        parsed_reads, n_processed, fh = get_parsed_reads(fn_fq, fh, enough_parsed_reads=enough_parsed_reads, threads=threads, parsed_reads_prev=parsed_reads_prev)
+        parsed_reads, n_processed, fh, end_reached = get_parsed_reads(fn_fq, fh, enough_parsed_reads=enough_parsed_reads, threads=threads, parsed_reads_prev=parsed_reads_prev)
     
         if debugmode:
             with open(fn_parsed_redas, 'wb') as o:
@@ -1048,6 +1077,8 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
             logger.info(red(f'parsed reads = {fntmp}'))
             with open(fntmp, 'w') as o:
                 print('\n'.join(map(str, parsed_reads)), file=o)
+    elif not parsed_reads:
+        parsed_reads = parsed_reads_prev
 
     n_parsed_reads = len(parsed_reads)
 
@@ -1088,14 +1119,14 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
                 iseq = i[1]
                 seq_all.setdefault(iseq, 0)
                 seq_all[iseq] += 1
-            top_mirna = sorted(seq_all.items(), key=lambda _: _[1], reverse=True)[:5]
+            top_mirna = sorted(seq_all.items(), key=lambda _: _[1], reverse=True)[:1]
             # exclude the first 20 most abundant miRNA
             glob_var['blocked_seq'] |= {_[0] for _ in top_mirna}
             logger.info(f"blocked seq count = {len(glob_var['blocked_seq'])}")
             
             parsed_reads_new = [_ for _ in parsed_reads if _[1] not in glob_var['blocked_seq']]
 
-        return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1)
+        return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1, end_reached=end_reached)
 
     return fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
@@ -1133,7 +1164,7 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, 
         tmp = main(pw_data, fq, force_parse_reads=force_parse_reads,
         min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh,
         threads=threads,
-        max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len,
+        max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, end_reached=0
         )
 
         try:
