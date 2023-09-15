@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 """
 build the simulation fastq file for performance test
 
@@ -6,17 +7,18 @@ acutal fastq file used is
 which is 4N+4N pattern
 """
 import re, sys, os, gzip
+import ahocorasick
+import pickle
 
 import argparse as arg
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
-ps.add_argument('fn', help="""input fastq file""")
+ps.add_argument('fn', help="""input fastq file, default is SRR6502962""", nargs='?')
 ps.add_argument('-force', '-f', action='store_true', help="""ignore the prev data""")
 args = ps.parse_args()
 
 sys.path.append('/home/chenh19/jb/query')
 
-from findadapt import get_most_expressed_smallRNA
 
 def getlogger(prefix=None):
     try:
@@ -54,8 +56,13 @@ def getlogger(prefix=None):
 
 logger = getlogger()
 
-def prepare_data(fn, force=False):
+def get_mir_list():
+    fn_pkl = '/home/chenh19/jb/public/findadapt/data/hsa.refseq.pkl'
+    with open(fn_pkl, 'rb') as f:
+        primary_padding_dict = pickle.load(f)
+    return list(primary_padding_dict)
 
+def prepare_data(fn, force=False):
     fn_matched = 'matched_reads.fastq'
     fn_unmatched = 'unmatched_reads.fastq'
     if not force and os.path.exists(fn_matched) and os.path.exists(fn_unmatched):
@@ -65,27 +72,28 @@ def prepare_data(fn, force=False):
     fh_matched = open(fn_matched, 'w')
     fh_unmatched = open(fn_unmatched, 'w')
 
-
-
     matched = {'max': 1_000_000, 'ct': 0, 'fh': fh_matched, 'lb': 'matched', 'done': 0}
-    unmatched = {'max': 2_000_000, 'ct': 0, 'fh': fh_unmatched, 'lb': 'unmatched', 'done': 0}
+    unmatched = {'max': 5_000_000, 'ct': 0, 'fh': fh_unmatched, 'lb': 'unmatched', 'done': 0}
 
     res = {0: unmatched, 1: matched}
 
-    mir_list = get_most_expressed_smallRNA('human')
-    mir_list = [_[0] for _ in mir_list]
+    mir_seq_l = get_mir_list()
+    aho = ahocorasick.Automaton()
+    for substring in mir_seq_l:
+        aho.add_word(substring, substring)
+    aho.make_automaton()
 
     def check_match(seq):
-        for mir_seq in mir_list:
-            if mir_seq in seq:
-                return 1
+        for i in aho.iter(seq):
+            return 1
         return 0
-
+        
+        
     logger.info('now reading the fq file')
     with gzip.open(fn, 'rt') as f:
         n = 0
         while True:
-            if res[0]['done'] + res[1]['done'] > 1:
+            if res[0]['done'] + res[1]['done'] == 2:
                 logger.info(f'enough reads got, n = {n}')
                 break
             header = f.readline()
@@ -101,7 +109,8 @@ def prepare_data(fn, force=False):
             qual = f.readline()
 
             if n % 100000 == 0:
-                logger.info(f'processing {n/10000:.0f}w reads')
+                ratio = matched['ct'] / n
+                logger.info(f'processing {n/10000:.0f}w reads, matched reads ratio = {ratio:.3f}')
             flag = check_match(seq)
             ires = res[flag]
             if not ires['done'] and ires['ct'] < ires['max']:
@@ -119,7 +128,8 @@ def prepare_data(fn, force=False):
         logger.info(f'{lb}:  ct = {v["ct"]}')
         v['fh'].close()
 
-
+    fh_matched.close()
+    fh_unmatched.close()
 
 
 def build_data():
@@ -136,11 +146,11 @@ def build_data():
             fho.write(fh.readline())
 
     import random
-    n_total_exp = 1_500_000
 
-
-    for ratio in [0.9]:
-    # for ratio in [0.5, 0.1, 0.01, 0.001]:
+    # for ratio in [0.9]:
+    for ratio in [0.9, 0.5, 0.1, 0.01, 0.001, 0.0001]:
+    # for ratio in [0.9, 0.5, 0.1, 0.01]:
+        n_total_exp = 1_000_000 if ratio >= 0.01 else 5_000_000
         logger.info(f'building data for ratio {ratio}')
         n_matched_written = 0
         n_unmatched_written = 0
@@ -165,6 +175,8 @@ def build_data():
                 n_total += 1
                 n_unmatched_written += 1
                 write_data(0, fho)
+            if ratio < 0.01 and n_total % 1000000 == 0:
+                logger.info(f'written: {n_total//1000000} M reads')
 
         fho.close()
 
@@ -173,12 +185,15 @@ def build_data():
 
 
 
-
-
-
-
 if __name__ == "__main__":
-    fn = args.fn
+    
+    # /data/cqs/chenh19/findadapt/findadapt_bench/download/SRR6831611.fastq.gz
+    # GSE111803, NEBNext, 233M, matched reads ratio is around 14%
+    fn = args.fn or '/data/cqs/chenh19/findadapt/findadapt_bench/download/SRR6831611.fastq.gz'
     force = args.force
+    logger.info(f'now spliting file')
     prepare_data(fn, force=force)
+    logger.info(f'split file done')
+    
+    logger.info(f'build simu data')
     build_data()
