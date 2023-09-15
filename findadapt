@@ -403,7 +403,7 @@ def pick_3p_adapter(adapter_ct):
                     skip = 1
                     break
             if skip:
-                logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
+                # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
                 continue
 
             # there are 3 cases
