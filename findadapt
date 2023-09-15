@@ -136,7 +136,7 @@ def getlogger(fn_log=None, logger_name=None, level='INFO', nocolor=False):
         fh_file.name = 'file'
         logger.addHandler(fh_file)
     return logger
-if not debugmode:
+if not benchmode:
     prefix =  args.o or 'findadapter'
     fn_log = f'{prefix}.log'
 else:
