@@ -371,6 +371,7 @@ def pick_3p_adapter(adapter_ct):
         except:
             continue
         for seq, ct in top5_seq:
+            # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, pos1')
             if ct > max_ct:
                 max_ct = ct
             if seq.startswith(polyA_seq) and ct > polyA_ct:
@@ -378,7 +379,6 @@ def pick_3p_adapter(adapter_ct):
             phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
             if phase <= phase_tmp and ct_tmp > ct:
                 ct = ct_tmp
-                
             # if phase == 0:
             #     res.append([seq, phase, ct])
             #     continue
@@ -403,7 +403,7 @@ def pick_3p_adapter(adapter_ct):
                     skip = 1
                     break
             if skip:
-                # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
+                logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
                 continue
 
             # there are 3 cases
@@ -421,14 +421,10 @@ def pick_3p_adapter(adapter_ct):
             if seq_truncated in lineage:
                 parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
                 # parent_lb = f'{parent_seq}_{parent_phase}'
-                if parent_phase <= phase and ct < parent_ct *thres_multiplier:
-                    skip = 1
-                    break
-            if skip:
-                continue
+                if parent_phase < phase and ct < parent_ct *thres_multiplier:
+                    # logger.info(f'skipped due to parent seq exist: current = {seq}, phase = {phase}, ct = {ct}, parenent found, {lineage[seq_truncated]}')
+                    continue
             res.append([seq, phase, ct])
-
-    # logger.info(res)
 
     if polyA_ct > max_ct * 0.4:
         return [['A' * 10, 0, polyA_ct]]
@@ -1237,6 +1233,9 @@ def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, 
 def guess_kit(picked):
     seq3, phase3 = picked[0][:2]
     phase5 = picked[1][0]
+    
+    if not seq3:
+        return None
     
     if seq3 == '' or seq3 == 'empty':
         return 'adapters already trimmed'
