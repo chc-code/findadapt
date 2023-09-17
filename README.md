@@ -34,15 +34,17 @@ docker run  chccode/findadapt reads.fastq.gz
 
  
 # SYNOPSIS   
-
+      #identify adapters for the fastq file from human
       findadapt reads.fastq.gz
+      #identify adapters for the fastq file from mice
       findadapt reads.fastq.gz -organism mouse
+      #list all the organisms that FindAdapt supports
       findadapt -list_org
       
-      # identify adapter sequences for all samples of a study from mice 
+      # identify adapters for a list of fastq files  from mice 
       findadapt -fn_fq_list fq_list.txt -organism mouse
 
-      # trim the identified adapters using cutadapt package 
+      # identify and trim adapters using cutadapt package 
       findadapt reads.fastq.gz -pw_cutadapt path/to/cutadapt -cut  
 
 
