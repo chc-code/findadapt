@@ -17,7 +17,7 @@ cd findadapt-master
 ./findadapt  -h
 ```
 
-To achieve the best performance, the installation of pyahocorasick is highly recommended. 
+The installation of pyahocorasick is optional, but recommended. 
 ```
 # install pyahocorasick
 pip install pyahocorasick
