@@ -30,7 +30,7 @@ ps.add_argument('-fn_refseq', help="""file name for known expressed sequence,  i
 ps.add_argument('-organism', '-org', help="""organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other """, default='human')
 ps.add_argument('-list_org', help="""list the supported organism and exit""", action='store_true')
 ps.add_argument('-nreads',  help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
-ps.add_argument('-nsam', '-ns', help="""how many samples used to check, if all, use -1, only valid for -gse, default=5""", default=5, type=int)
+ps.add_argument('-nsam', '-ns', help="""how many samples used to check, default is all samples (-1), only valid for -fn_fq_list""", default=-1, type=int)
 ps.add_argument('-v', '-verbose',  help="""verbose""", action='store_true')
 ps.add_argument('-max_random_linker', help="""max random seq lenghth padding insert seq, default = 8""", type=int, default=8)
 ps.add_argument('-expected_adapter_len', '-adapt_len', help="""expected adapter len to discover, default = 12 nt""", type=int, default=12)
