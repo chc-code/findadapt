@@ -77,7 +77,7 @@ either a list of sequences (fasta format or one sequence per line) by '-fn_refse
 - `-expected_adapter_len int`  the length of adapter sequence, default = 12 bp   
 - `-max_random_linker int`   the maximum length of random-mer, default = 8 bp
 - `-nreads int`  the maximum number of reads used to find adapter, default: 1 million, if use all reads, set as -1
-- `-nsam int`  the number of samples foradapter identification in a file list,  default: all samples
+- `-nsam int`  the number of samples foradapter identification in a file list,  default is all samples. Only valid when -fn_fq_list is specified
 - `-thres_multiplier float`    the threshold of the ratio between the count of the child and the count of the parent, default=1.2; if >1.2, save the child record; otherwise, save the parent record
 - `-min_reads int`  the minimum number of matched reads for adapter identification, default=30. if lower than this value, the adapter identification will fail and users may need to check the reference settings.   
 - `-threads / -cpu int` the number of threads, default = 5. 
@@ -140,19 +140,19 @@ Or use the output to build their own cutadapt command.
 
 ```
 # if 3p_seq is empty and 5p_phase > 0:
-{pw_cutadapt} -u {5p_phase} -m 15 -j 8  --trim-n {fn_fq} -o {fn_out}
+cutadapt -u {5p_phase} -m 15 -j 8  --trim-n {fn_fq} -o {fn_out}
 
 # elif 3p seq is not empty and 5p_phase = 3p_phase = 0
-{pw_cutadapt} -a {seq_3p} -m 15 -j 8  --trim-n  {fn_fq} -o {fn_out}
+cutadapt -a {seq_3p} -m 15 -j 8  --trim-n  {fn_fq} -o {fn_out}
 
 # if 3p_phase > 0 and 5p_phase == 0
-{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -m 15 -o {fn_out}
+cutadapt -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -m 15 -o {fn_out}
 
 # if 3p_phase = 0 and 5p_phase > 0
-{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u {5p_phase} -m 15 -o {fn_out}
+cutadapt -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u {5p_phase} -m 15 -o {fn_out}
 
 # if 3p_phase > 0 and 5p_phase > 0
-{pw_cutadapt} -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -u {5p_phase} -m 15 -o {fn_out}
+cutadapt -a {seq_3p} -j 8 --trim-n  {fn_fq} |cutadapt -u -{3p_phase} -u {5p_phase} -m 15 -o {fn_out}
 ```
 
 
