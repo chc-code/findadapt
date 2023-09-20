@@ -23,16 +23,32 @@ The installation of pyahocorasick is optional, but recommended.
 pip install pyahocorasick
 ```
 
-## docker image
+## Docker / Singularity image
 A docker image is also available at https://hub.docker.com/r/chccode/findadapt
 (`pyahocorasick` is contained, and the findadapt script is set as the entrypoint.)
 
 ```
 docker pull chccode/findadapt
-docker run  chccode/findadapt reads.fastq.gz  
+
+# get the help information if no arguments are specified
+docker run chccode/findadapt
+
+# suppose your fastq file is under /data/folder1/folder2/reads.fastq.gz
+docker run -v /data:/data chccode/findadapt /data/folder1/folder2/reads.fastq.gz
 ```
 
- 
+You can also use Singularity if docker is not available
+
+```
+singularity build findadapt.sif docker://chccode/findadapt
+
+# get the help information if no arguments are specified
+singularity run findadapt.sif
+
+# suppose your fastq file is under /data/folder1/folder2/reads.fastq.gz
+docker run -B /data findadapt.sif /data/folder1/folder2/reads.fastq.gz
+```
+
 # SYNOPSIS   
       #identify adapters for the fastq file from human
       findadapt reads.fastq.gz
