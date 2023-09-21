@@ -325,11 +325,8 @@ def pick_3p_adapter(adapter_ct):
     adapter_ct_by_seq = {}
     for phase in sorted(adapter_ct):
         for seq, ct in adapter_ct[phase].items():
-            if seq not in adapter_ct_by_seq:
-                adapter_ct_by_seq[seq] = [phase, ct]
-            elif ct > adapter_ct_by_seq[seq][1]:
-                adapter_ct_by_seq[seq][1] = ct
-    
+            adapter_ct_by_seq.setdefault(seq, []).append([phase, ct])
+
     for phase in range(max_random_linker):
         try:
             top5_seq = sorted(adapter_ct[phase].items(), key=lambda _: _[1], reverse=True)[:5]
@@ -340,7 +337,6 @@ def pick_3p_adapter(adapter_ct):
             child_seq = seq[1:]
             if child_seq not in lineage:
                 lineage[child_seq] = [seq, phase, ct]
-                
             # same squence, different phase, current phase is higher, 
             # only replace when the count is much bigger
             elif seq == lineage[child_seq][idx_seq]:
@@ -356,7 +352,7 @@ def pick_3p_adapter(adapter_ct):
             elif ct > lineage[child_seq][idx_ct] * thres_multiplier:
                 lineage[child_seq] = [seq, phase, ct]
 
-    # logger.info(lineage)
+    logger.info(lineage)
 
     res = []
     keep_status = {}
@@ -376,31 +372,35 @@ def pick_3p_adapter(adapter_ct):
                 max_ct = ct
             if seq.startswith(polyA_seq) and ct > polyA_ct:
                 polyA_ct = ct
-            phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
-            if phase <= phase_tmp and ct_tmp > ct:
-                ct = ct_tmp
-            # if phase == 0:
-            #     res.append([seq, phase, ct])
-            #     continue
+                
+            # phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
+            # if phase <= phase_tmp and ct_tmp > ct:
+            #     ct = ct_tmp
+
             skip = 0
             for seq_tmp, v_tmp in adapter_ct_by_seq.items():
-                if seq_tmp == seq and phase == v_tmp[0]:
-                    # itself
-                    continue
-                if seq_tmp == seq and phase > v_tmp[0]:
-                    # same sequence, but other has smaller phase
-                    skip = 1
-                    reason = 'same_seq,lower_phase_found'
-                    break
-                if seq in seq_tmp and phase > v_tmp[0]:
-                    # is a subsequence of the lower phase sequence
-                    reason = 'subsequence of lower_phase'
-                    skip = 1
-                    break
-                if seq in seq_tmp and phase == v_tmp[0] and ct < vtmp[1]:
-                    # is a subsequence of the same phase, but
-                    reason = 'subsequence of same phase, but count is lower'
-                    skip = 1
+                for phase_tmp, ct_tmp in v_tmp:                    
+                    if seq_tmp == seq and phase == phase_tmp:
+                        # itself
+                        continue
+                    if phase < phase_tmp:
+                        break
+                    if phase > phase_tmp and seq_tmp == seq and ct <= ct_tmp * thres_multiplier:
+                        # same sequence, but other has smaller phase
+                        skip = 1
+                        reason = 'same_seq,lower_phase_found'
+                        break
+                    if phase > phase_tmp and seq[:phase_tmp-phase] in seq_tmp and ct <= ct_tmp * thres_multiplier:
+                        # is a subsequence of the lower phase sequence
+                        reason = 'subsequence of lower_phase'
+                        skip = 1
+                        break
+                    if seq[:-2] in seq_tmp and phase == phase_tmp and ct < vtmp[1]:
+                        # is a subsequence of the same phase, but
+                        reason = 'subsequence of same phase, but count is lower'
+                        skip = 1
+                        break
+                if skip == 1:
                     break
             if skip:
                 # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
