@@ -352,7 +352,7 @@ def pick_3p_adapter(adapter_ct):
             elif ct > lineage[child_seq][idx_ct] * thres_multiplier:
                 lineage[child_seq] = [seq, phase, ct]
 
-    logger.info(lineage)
+    # logger.info(lineage)
 
     res = []
     keep_status = {}
@@ -376,7 +376,12 @@ def pick_3p_adapter(adapter_ct):
             # phase_tmp, ct_tmp = adapter_ct_by_seq[seq]
             # if phase <= phase_tmp and ct_tmp > ct:
             #     ct = ct_tmp
-
+            if seq == '':
+                if ct > empty_adapter_ct[1] * thres_multiplier:
+                    empty_adapter_ct[1] = ct
+                    empty_adapter_ct[0] = phase
+                continue
+            
             skip = 0
             for seq_tmp, v_tmp in adapter_ct_by_seq.items():
                 for phase_tmp, ct_tmp in v_tmp:                    
@@ -385,25 +390,25 @@ def pick_3p_adapter(adapter_ct):
                         continue
                     if phase < phase_tmp:
                         break
-                    if phase > phase_tmp and seq_tmp == seq and ct <= ct_tmp * thres_multiplier:
+                    if phase > phase_tmp and seq_tmp == seq and ct <= ct_tmp * 2:
                         # same sequence, but other has smaller phase
                         skip = 1
-                        reason = 'same_seq,lower_phase_found'
+                        reason = f'same_seq,lower_phase_found'
                         break
                     if phase > phase_tmp and seq[:phase_tmp-phase] in seq_tmp and ct <= ct_tmp * thres_multiplier:
                         # is a subsequence of the lower phase sequence
                         reason = 'subsequence of lower_phase'
                         skip = 1
                         break
-                    if seq[:-2] in seq_tmp and phase == phase_tmp and ct < vtmp[1]:
-                        # is a subsequence of the same phase, but
-                        reason = 'subsequence of same phase, but count is lower'
-                        skip = 1
-                        break
+                    # if phase == phase_tmp and seq[:-2] in seq_tmp and ct <= ct_tmp * thres_multiplier:
+                    #     # is a subsequence of the same phase, but
+                    #     reason = 'subsequence of same phase, but count is lower'
+                    #     skip = 1
+                    #     break
                 if skip == 1:
                     break
             if skip:
-                # logger.info(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
+                logger.debug(f'phase = {phase}, ct = {ct}, seq = {seq}, skip reason = {reason}')
                 continue
 
             # there are 3 cases
@@ -412,11 +417,7 @@ def pick_3p_adapter(adapter_ct):
             # 3 = parent not found - keep
             current_lb = f'{seq}_{phase}'
             # for the empty adapter,
-            if seq == '':
-                if ct > empty_adapter_ct[1] * thres_multiplier:
-                    empty_adapter_ct[1] = ct
-                    empty_adapter_ct[0] = phase
-                continue
+
             seq_truncated = seq[:-1]
             if seq_truncated in lineage:
                 parent_seq, parent_phase, parent_ct = lineage[seq_truncated]
@@ -688,7 +689,7 @@ def parse_fq_reads(fh, parse_read_func, aho_model, primary_padding_dict, blocked
         header = fh.readline()
         if not header:
             end_reached = n
-            logger.info(f'end reached, n_reads = {n}, pos = {fh.tell()}')
+            # logger.info(f'end reached, n_reads = {n}, pos = {fh.tell()}')
             break
         try:
             # because of random start of the file chunk, the fh may be in the middle of a read
@@ -784,7 +785,7 @@ def process_chunk(fn_fq, shared_vars, chunk_start, total_max_reads_to_process=40
             break
 
         if end_reached:
-            logger.info(red(f'\t\t{fq_lb1}: whole fq read through, total_reads = {(end_reached + reads_per_round * i) / 1000000:.2f} M, matched = {n_parsed}'))
+            logger.debug(f'\t\t{fq_lb1}: whole fq read through, total_reads = {(end_reached + reads_per_round * i) / 1000000:.2f} M, matched = {n_parsed}')
             break
         if n_parsed > enough_parsed_reads:
             logger.debug(f'enough reads got')
