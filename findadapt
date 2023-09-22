@@ -613,8 +613,8 @@ def infer_3_end_adapter(parsed_reads, max_random_linker=6, max_borrowed_base=1, 
 
     picked_adapter =  pick_3p_adapter(ct)
     if len(picked_adapter) == 0:
-        # [seq, phase, ct]
-        picked_adapter = [['NA', 'NA', 0]]
+        
+        picked_adapter = [['NA', 'NA', 0]] # [seq, phase, ct]
 
     return picked_adapter
 
@@ -642,7 +642,7 @@ def infer_5_end_adapter(parsed_reads, adapter3):
 
     try:
         ct = sorted(ct.items(), key=lambda _: _[1], reverse=True)
-        max_ct = ct[0][1]
+        max_ct = [_ for _ in ct if _[0] != too_long_lb][0][1]
     except:
         return [['NA', 0]], 'cannot get the 5 end seq count'
     if debugmode:
@@ -652,8 +652,8 @@ def infer_5_end_adapter(parsed_reads, adapter3):
     except:
         pass
     else:
-        if adapter3_seq.startswith('A' * 8) and phase_3_ct > 0:
-            return [[3, phase_3_ct or max_ct]], None
+        if adapter3_seq.startswith('A' * 8) and phase_3_ct > max_ct * 0.2:
+            return [[3, phase_3_ct]], None
 
     ct = [_ for _ in ct if _[1] > max_ct * 0.1]
     return ct, None
@@ -924,13 +924,13 @@ def get_fq_lb(fn_fq):
 
     return fq_lb1
 
-def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
+def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq, recursive=False):
     """
     1. check if certain miRNA seq is dominant  in the parsed reads result
     2. calc the ratio of the found 3' adapter in the first 1000 reads of the file
     """
     
-    dominant_ratio_thres = 0.6
+    dominant_ratio_thres = 0.4
     adapter3_seq = adapter3_seq.upper()
     if adapter3_seq == 'NA':
         return None, None
@@ -949,7 +949,7 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     
     if seq_top10[0][1] > dominant_ratio_thres:
         is_dominant = 1
-        dominant_seq = seq_top10[0][0]
+        dominant_seq = seq_top10[0]
     else:
         is_dominant = 0
         dominant_seq = None
@@ -1018,19 +1018,19 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     else:
         adapter_ratio = 1
     
-    if end_reached > 0 and end_reached < n_reads_check:
+    if not recursive and end_reached > 0 and end_reached < n_reads_check:
         # the fh passed in is near the end
         # assume one reads use 400 byte, to get the pos of 2000 reads
-        fh.seek(400 * 5000)
+        fh.seek(0)
         logger.info(f'file end reached, now return to file start')
-        return check_dominant(fn_fq, fh, parsed_reads, adapter3_seq)
+        return check_dominant(fn_fq, fh, parsed_reads, adapter3_seq, recursive=True)
 
     if adapter_ratio < 0.4:
         logger.debug(red(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads too low:  {adapter_ratio}'))
         if adapter_ratio < 0.01 and adapter3_seq not in {'TCTGGAATTCTC', 'TGGAATTCTCGG', 'AGATCGGAAGAG', 'GATCGGAAGAGC', 'AACTGTAGGCAC', 'ATCTCGTATGCC'}:
             is_dominant = 1
             # if seq_top10[0][1] > 0.2:
-            dominant_seq = seq_top10[0][0]
+            dominant_seq = seq_top10[0]
     else:
         logger.debug(green(f'3p adapter sequence : {adapter3_seq}, ratio in first {n_reads_check} reads is ok:  {adapter_ratio}'))
             
@@ -1040,7 +1040,7 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq):
     return is_dominant, dominant_seq
 
 
-def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0, end_reached=0): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_parsed_reads=1000, fh=None, threads=10, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12,  parsed_reads_prev=None, recursive_round=0, end_reached=0, prev_ret_res=None): # -> fq_lb, n_parsed_reads, adapter3, adapter5, err_msg_5_end
 
     if parsed_reads_prev:
         logger.debug(f'\tparsed_reads_prev found: n = {len(parsed_reads_prev)}, recursive_round = {recursive_round}')
@@ -1048,6 +1048,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
     # process the reads
     fq_lb1 = get_fq_lb(fn_fq)
     do_parse_reads = True
+    prev_ret_res = prev_ret_res or []
 
     parsed_reads = None
     fn_parsed_redas = f'{pw_data}/{fq_lb1}.parsed_reads.pkl'
@@ -1098,15 +1099,22 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
     # adapter3 = [seq, phase, count]
     adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads, adapter3)
 
+    ret_res = fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+    
+    if adapter3 is not None and adapter5 is not None:
+        prev_ret_res.append(ret_res)
+
     # check for dominant miRNA
-    is_dominant, dominant_seq = check_dominant(fn_fq, fh, parsed_reads, adapter3[0][0])
+    is_dominant, (dominant_seq, dominant_ratio) = check_dominant(fn_fq, fh, parsed_reads, adapter3[0][0])
 
     if is_dominant:
         if recursive_round > 6:
             logger.error(red(f'recusive run round = {recursive_round}, dominant sequence still exist or the identified adapter frequency found in fastq file is too low'))
-            return None
+            if len(prev_ret_res) == 0:
+                return None
+            return prev_ret_res[-1]
         if recursive_round < 3:
-            logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}')
+            logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}, ratio = {dominant_ratio}')
             if glob_var['blocked_seq'] is None:
                 glob_var['blocked_seq'] = {dominant_seq, }
             else:
@@ -1114,7 +1122,6 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
             parsed_reads_new = [_ for _ in parsed_reads if _[1] != dominant_seq]
         else:
             logger.debug(f'recursive run round {recursive_round}, ignore all prev parsed_reads')
-            
             seq_all = {}
             for i in parsed_reads:
                 iseq = i[1]
@@ -1127,9 +1134,9 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
             
             parsed_reads_new = [_ for _ in parsed_reads if _[1] not in glob_var['blocked_seq']]
 
-        return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1, end_reached=end_reached)
+        return main(pw_data, fn_fq,  force_parse_reads=force_parse_reads, min_parsed_reads=min_parsed_reads, enough_parsed_reads=enough_parsed_reads, fh=fh, threads=threads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len, parsed_reads_prev=parsed_reads_new, recursive_round=recursive_round+1, end_reached=end_reached, prev_ret_res=prev_ret_res)
 
-    return fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
+    return ret_res
 
 def get_adapter_per_prj(prj, fq_list, pw_data, force_parse_reads=False, nsam=5, ires=None, min_parsed_reads=30, enough_parsed_reads=1000, max_random_linker=6, max_borrowed_base=1, expected_adapter_len=12, threads=10, fh=None):
 
