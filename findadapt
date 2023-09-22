@@ -1093,19 +1093,25 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
     logger.debug(green(f'total matched reads for inferring = {n_parsed_reads}, n_processed = {n_processed}, matched reads density = {n_processed/n_parsed_reads:.1f}'))
 
     # [seq, phase, ct]
+    
+    # adapter3 = [['NA', 'NA', 0], [seq2, phase2, ct2], ...] # [seq, phase, ct]
     adapter3 = infer_3_end_adapter(parsed_reads, max_random_linker=max_random_linker, max_borrowed_base=max_borrowed_base, expected_adapter_len=expected_adapter_len)
 
     # adapter 5 = [phase, count]
     # adapter3 = [seq, phase, count]
+    # adapter5 = [['NA', 0], [phase2, ct2], ...], 'err_msg'
     adapter5, err_msg_5_end = infer_5_end_adapter(parsed_reads, adapter3)
 
     ret_res = fq_lb1, n_parsed_reads, adapter3, adapter5, err_msg_5_end
     
-    if adapter3 is not None and adapter5 is not None:
+    if adapter3[0][0] != 'NA' and adapter5[0][0] != 'NA':
         prev_ret_res.append(ret_res)
+        # logger.info([_[1:] for _ in prev_ret_res])
 
     # check for dominant miRNA
-    is_dominant, (dominant_seq, dominant_ratio) = check_dominant(fn_fq, fh, parsed_reads, adapter3[0][0])
+    is_dominant, tmp = check_dominant(fn_fq, fh, parsed_reads, adapter3[0][0])
+    if tmp:
+        dominant_seq, dominant_ratio = tmp
 
     if is_dominant:
         if recursive_round > 6:
