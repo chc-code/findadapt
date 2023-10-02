@@ -402,7 +402,7 @@ def pick_3p_adapter(adapter_ct):
                         break
                     # if phase == phase_tmp and seq[:-2] in seq_tmp and ct <= ct_tmp * thres_multiplier:
                     #     # is a subsequence of the same phase, but
-                    #     reason = 'subsequence of same phase, but count is lower'
+                    #     reason = f'subsequence of same phase, but count is lower, other seq = {(phase_tmp, seq_tmp, ct_tmp)} ct = {ct}'
                     #     skip = 1
                     #     break
                 if skip == 1:
@@ -929,8 +929,8 @@ def check_dominant(fn_fq, fh_prev, parsed_reads, adapter3_seq, recursive=False):
     1. check if certain miRNA seq is dominant  in the parsed reads result
     2. calc the ratio of the found 3' adapter in the first 1000 reads of the file
     """
-    
-    dominant_ratio_thres = 0.4
+
+    dominant_ratio_thres = 0.3
     adapter3_seq = adapter3_seq.upper()
     if adapter3_seq == 'NA':
         return None, None
