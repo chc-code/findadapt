@@ -31,7 +31,7 @@ def parse_time(fn, fq_for_testing):
             
             return None
         cmd = f.readline()
-        fq_path = f'{pw}/download/{lb}.fastq.gz'
+        fq_path = fq_for_testing[lb]
         
         ires = {'time': None, 'memory': None}
         for i in f:
@@ -51,6 +51,28 @@ def parse_time(fn, fq_for_testing):
     return [lb, fq_path, ires['time'], ires['memory']] + real_adapter_info[lb]
 
 
+def check_match(fq_lb, found_adapt_seq):
+    seq_exp = [_.upper().strip() for _ in real_adapter_info[lb][2].split(' ')]  # gse, kit_exp, seq_3p_exp
+    polya_found = 0
+    for _ in seq_exp:
+        if _ == '':
+            seq_exp.append('empty')
+        if _[:10] == 'A' * 10:
+            polya_found = 1
+            break
+
+    found_adapt_seq = found_adapt_seq.upper()
+    seq_first_12 = found_adapt_seq[:12]
+    
+    
+    if seq_first_12 in {'', 'EMPTY'}:
+        seq_first_12 = 'empty'
+
+    if seq_first_12 in seq_exp or (polya_found and found_adapt_seq[:10] == 'A' * 10):
+        return f'{green}match{reset}'
+    else:
+        return f'{red}fail{reset}'
+
 def parse_findadapt(pwo, lb):
     fn = f'{pwo}/{lb}.adapter.txt'
     seq_exp = real_adapter_info[lb][2].split(' ')  # gse, kit_exp, seq_3p_exp
@@ -62,10 +84,10 @@ def parse_findadapt(pwo, lb):
         ires = [line[_] for _ in [2, 3, 4, 6, 7]]
         if not ires[0]:
             ires[0] = 'empty'
-        if ires[0] in seq_exp and ires[1] == '0' and ires[3] == '0':
-            ires.append(f'{green}match{reset}')
-        else:
-            ires.append(f'{red}fail{reset}')
+        
+        seq = ires[0]
+        match_res = check_match(lb, seq)
+        ires.append(match_res)
         
         return ires
     
@@ -75,16 +97,13 @@ def parse_dnapi(pwo, lb):
     # the content is a single seq
     # the length is not fixed
     fn = f'{pwo}/log/{lb}.log'
-    seq_exp = real_adapter_info[lb][2].split(' ')  # gse, kit_exp, seq_3p_exp
     
     with open(fn) as f:
-        seq = f.read().strip().replace('\n', '@')
-        seq_first_12 = seq[:12]
+        seq = f.read().strip().replace('\n', '@') # incase there are multiple lines
+        
         ires = [seq, 0, 'NA', 0, 'NA']
-        if seq_first_12 in seq_exp or seq[:10] == 'A' * 10:
-            ires.append(f'{green}match{reset}')
-        else:
-            ires.append(f'{red}fail{reset}')
+        match_res = check_match(lb, seq)
+        ires.append(match_res)
         return ires
 
 def parse_fastp(pwo, lb):
@@ -97,7 +116,6 @@ def parse_fastp(pwo, lb):
     # No adapter detected for read1
     
     fn = f'{pwo}/err/{lb}.err'
-    seq_exp = real_adapter_info[lb][2].split(' ')  # gse, kit_exp, seq_3p_exp
 
     with open(fn) as f:
         collect = 0
@@ -118,12 +136,9 @@ def parse_fastp(pwo, lb):
                     seq = i
                     break
         
-        ires = [seq, 0, 'NA', 0, 'NA']
-        seq_first_12 = seq[:12]
-        if seq_first_12 in seq_exp or seq[:10] == 'A' * 10:
-            ires.append(f'{green}match{reset}')
-        else:
-            ires.append(f'{red}fail{reset}')
+        match_res = check_match(lb, seq)
+        ires = [seq, 0, 'NA', 0, 'NA', match_res]
+
         return ires
     
 def parse_earring(pwo, lb):
@@ -144,7 +159,6 @@ def parse_earring(pwo, lb):
     # adapter found: TCATTTCTTTGTT
     # 8.7337 sec
     fn = f'{pwo}/log/{lb}.log'
-    seq_exp = real_adapter_info[lb][2].split(' ')  # gse, kit_exp, seq_3p_exp
 
     with open(fn) as f:
         for i in f:
@@ -162,11 +176,9 @@ def parse_earring(pwo, lb):
             seq = seq_raw
         
         ires = [seq, 0, 'NA', 0, 'NA']
-        seq_first_12 = seq[:12]
-        if seq_first_12 in seq_exp or seq[:10] == 'A' * 10:
-            ires.append(f'{green}match{reset}')
-        else:
-            ires.append(f'{red}fail{reset}')
+        match_res = check_match(lb, seq)
+        ires.append(match_res)
+
         return ires
 
     #  the fastq files that EARRINGS found the adapter
@@ -206,6 +218,11 @@ def parse_atropos(pwo, lb):
 
     fn = f'{pwo}/log/{lb}.log'
     seq_exp = real_adapter_info[lb][2].split(' ')  # gse, kit_exp, seq_3p_exp
+    polya_found = 0
+    for _ in seq_exp:
+        if _[:10] == 'A' * 10:
+            polya_found = 1
+            break
 
     with open(fn) as f:
         seq = 'empty'
@@ -215,11 +232,9 @@ def parse_atropos(pwo, lb):
                 seq = i.split(':')[-1].strip()
                 break
         ires = [seq, 0, 'NA', 0, 'NA']
-        seq_first_12 = seq[:12]
-        if seq_first_12 in seq_exp or seq[:10] == 'A' * 10:
-            ires.append(f'{green}match{reset}')
-        else:
-            ires.append(f'{red}fail{reset}')
+        match_res = check_match(lb, seq)
+        ires.append(match_res)
+
         return ires
 
 
@@ -244,7 +259,6 @@ if __name__ == "__main__":
 
     with open(f'{prefix}.fq_to_run.lb.json') as f:
         fq_for_testing = json.load(f)
-        fq_for_testing = set(fq_for_testing)
     
     fn_real_adapter_info = f'{prefix}.real_adapter_info.json'
     if os.path.exists(fn_real_adapter_info):
