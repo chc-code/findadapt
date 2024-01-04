@@ -7,6 +7,9 @@ this script can also handle the random sequence between insert and adapter
 ####### updates #######
 2023-01-29 update, fix the situation when one miRNA dominate the matched reads
 2023-04-01, disable the dump parsed reads by default
+2024-01-04 - 
+  1. for -organism <string>  option, you can now directly use the organism name as option. e.g.  "-mouse" is equiv to "-organism mouse"  "-osa" is equiv to "-organism osa"
+  2. the input for -fn_fq_list / -list / -l can now be single column, which is the fastq file names, each file per line, they will be treat as the same project
 
 """
 
@@ -20,6 +23,12 @@ import multiprocessing as mp
 import gzip
 from collections import deque
 
+import logging
+benchmode = False
+
+
+platform = sys.platform
+
 from argparse import RawTextHelpFormatter
 ps = arg.ArgumentParser(description=__doc__, formatter_class=RawTextHelpFormatter)
 ps.add_argument('fq', help="""single fastq file path""", nargs='?')
@@ -27,7 +36,7 @@ ps.add_argument('-fn_fq_list', '-list', '-l', help="""2 column text file , col1 
 ps.add_argument('-o',  '-out', help="""output prefix""")
 ps.add_argument('-quiet', '-q',  help="""suppress the pyahocorasick not installed warning""", action='store_true')
 ps.add_argument('-fn_refseq', help="""file name for known expressed sequence,  in fasta format or one sequence per line.""", nargs='?')
-ps.add_argument('-organism', '-org', help="""organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other """, default='human')
+ps.add_argument('-organism', '-org', help="""organism name  default is human. valid = human, mouse, fruitfly, worm (c. elegans), arabidopsis, rice. Alternatively, you can use the miRBase prefix, such hsa, mmu, dme, cel, ath, osa; or, if -fn_refseq is specified, you can specify as other. Alternatively you can directly use -mouse as a shortcut of -organism mouse. This also apply to other organisms""", default='human')
 ps.add_argument('-list_org', help="""list the supported organism and exit""", action='store_true')
 ps.add_argument('-nreads',  help="""reads number used to find adapter, default is 1 million, if use all reads, set as -1""", default=1000000, type=int)
 ps.add_argument('-nsam', '-ns', help="""how many samples used to check, default is all samples (-1), only valid for -fn_fq_list""", default=-1, type=int)
@@ -46,9 +55,9 @@ ps.add_argument('-borrow', '-b',  help="""max borrow base length, default is 2""
 ps.add_argument('-force', '-f',  help="""ignore the existing parsed reads pickle file (gererated when using  -debug), parse reads from scratch""", action='store_true')
 ps.add_argument('-human_selected', help="""only use the most expressed 100 miRNA, only valid when organism is human""", action='store_true')
 
-benchmode = False
 
-args = ps.parse_args()
+args, other_args = ps.parse_known_args()
+
 
 debugmode = args.debug
 force_parse_reads = args.force
@@ -60,7 +69,6 @@ thres_multiplier = args.thres_multiplier
 
 glob_var = {'blocked_seq': None}
 
-import logging
 
 def getlogger(fn_log=None, logger_name=None, level='INFO', nocolor=False):
     logger_name = logger_name or "main"
@@ -144,10 +152,6 @@ else:
 
 level = 'DEBUG' if args.debug or verbose else 'INFO'
 logger = getlogger(fn_log, level=level)
-
-platform = sys.platform
-
-
 def colored(text, color=None, on_color=None, attrs=None):
     # Copyright (c) 2008-2011 Volvox Development Team
     #
@@ -814,7 +818,7 @@ def get_parsed_reads(fn_fq, fh, enough_parsed_reads=1000, threads=10, parsed_rea
     
     if parsed_reads_prev:
         enough_parsed_reads = enough_parsed_reads - len(parsed_reads_prev)
-        logger.info(green(f'current enough reads = {enough_parsed_reads}'))
+        logger.debug(green(f'current enough reads = {enough_parsed_reads}'))
 
     # check if the input data is a file
     try:
@@ -1120,7 +1124,7 @@ def main(pw_data, fn_fq,  force_parse_reads=False, min_parsed_reads=30, enough_p
                 return None
             return prev_ret_res[-1]
         if recursive_round < 3:
-            logger.warning(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}, ratio = {dominant_ratio}')
+            logger.debug(f'now doing recursive run to avoid dominant miRNA: {dominant_seq}, ratio = {dominant_ratio}')
             if glob_var['blocked_seq'] is None:
                 glob_var['blocked_seq'] = {dominant_seq, }
             else:
@@ -1516,6 +1520,9 @@ def parse_organism(name, list_org=False):
     
     name_map1 = dict(name_map)
     
+    if name == 'list':
+        return supported_prefix | {_[0] for _ in name_map}
+    
     if list_org:
         info = f'Supported organisms are:\n'
         tmp = [' / '.join(_) for _ in name_map2]
@@ -1696,8 +1703,28 @@ def build_model(organism, fn_refseq, legacy_mode=False, quiet=False, force_custo
 
     return aho, primary_padding_dict, installed, mir_seq_l
 
+def validate_organism(org_direct_specify):
 
+    if len(org_direct_specify) > 1:
+        print(f'more than 1 unkown arguments are specified. the first will be be recognized as orgnanism (you can only specify 1 organism), the rest are not recognized, you input is {other_args}')
+        sys.exit(1)
+    supported_org = parse_organism('list')
+    invalid = org_direct_specify - supported_org
+    if len(invalid) > 0:
+        tmp = parse_organism(list(invalid)[0], list_org=True)
+        print(f'invalid organism specified: {sorted(invalid)}\n{tmp}')
+        sys.exit(1)
+        
 if __name__ == "__main__":
+
+    if len(other_args) > 0:
+        org_direct_specify = {_[1:].lower() for _ in other_args}
+
+        validate_organism(org_direct_specify)
+
+        args.organism = list(org_direct_specify)[0]
+
+
 
     fn_fq = args.fq
     gse_map = args.fn_fq_list
@@ -1735,7 +1762,15 @@ if __name__ == "__main__":
                 i = i.strip()
                 if not i:
                     continue
-                gse, fq = i.split('\t')
+                tmp = i.split('\t')
+                if len(tmp) == 2:
+                    gse, fq = tmp
+                elif len(tmp) == 1:
+                    gse = 'default_prj'
+                    fq = tmp[0]
+                else:
+                    logger.warning(f'invalid line in fq_list: {i}')
+                    continue
                 if not fq.endswith('.fastq.gz') and not fq.endswith('.fastq') and not fq.endswith('.fq.gz'):
                     invalid_fq.append(i)
                     continue
